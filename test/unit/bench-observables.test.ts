@@ -4,12 +4,13 @@ import * as path from "node:path";
 import {
   FORBIDDEN_CHECKERS,
   INVARIANT_CHECKERS,
+  judgementsOf,
   observe,
   observedParallelism,
   type BenchObservation,
 } from "../../bench/runners/observables.js";
 import { parseTrace } from "../../bench/runners/opencode.js";
-import { loadCases, scoreCase, validateCaseDefinition } from "../../bench/runners/run.js";
+import { enabledCases, loadCases, resultFromRun, scoreCase, validateCaseDefinition } from "../../bench/runners/run.js";
 import { emptyObservation } from "./helpers.js";
 
 function obs(partial: Partial<BenchObservation>): BenchObservation {
@@ -251,19 +252,42 @@ describe("bench cases", () => {
 });
 
 describe("a timed-out run is reported, not punished", () => {
-  it("keeps the measured score instead of zeroing it", async () => {
+  it("keeps the measured score instead of zeroing it", () => {
     // The first real bench run scored every case 0 because a timeout
     // overwrote a measured score. A cut-off run has a partial measurement;
     // zeroing it threw away the only evidence the bench produces.
-    const { runCase } = await import("../../bench/runners/run.js");
-    const cases = loadCases();
-    const arch = cases.find((c) => c.id === "AGENT-TEAM-ARCH-001")!;
-    const result = await runCase(arch, { model: "nonexistent/model", timeoutMs: 20_000 });
+    //
+    // The rule is exercised on the mapping, not on a real run: a real run
+    // against a model that does not exist leaves a failed session in the
+    // developer's own OpenCode store, and the unit suite never spawns the
+    // real CLI.
+    const arch = loadCases().find((c) => c.id === "AGENT-TEAM-ARCH-001")!;
+    const observed = observe(arch.id, arch.expected_invariants, arch.forbidden_behaviors, obs({ ledger: FULL_LEDGER }), { incomplete: true });
+    const result = resultFromRun(arch, observed, { timedOut: true, exitCode: -1 }, []);
     expect(result.status).toBe("evaluated");
-    if (result.incomplete === true) {
-      expect(result.score).not.toBeNull();
-      expect(result.forbiddenEvaluated).toBe(false);
-    }
+    expect(result.incomplete).toBe(true);
+    expect(result.score).toBe(1);
+    expect(result.forbiddenEvaluated).toBe(false);
+    expect(result.detail).toContain("timed out");
+  });
+
+  it("scores a finished run and reports the exit code it ended with", () => {
+    const arch = loadCases().find((c) => c.id === "AGENT-TEAM-ARCH-001")!;
+    const observed = observe(arch.id, arch.expected_invariants, arch.forbidden_behaviors, obs({ ledger: FULL_LEDGER }));
+    const clean = resultFromRun(arch, observed, { timedOut: false, exitCode: 0 }, []);
+    expect(clean.incomplete).toBeUndefined();
+    expect(clean.forbiddenEvaluated).toBe(true);
+    expect(clean.detail).toBeUndefined();
+    const failed = resultFromRun(arch, observed, { timedOut: false, exitCode: 1 }, []);
+    expect(failed.detail).toBe("exit code 1");
+  });
+
+  it("zeroes the score when the run did not write the files it promised", () => {
+    const arch = loadCases().find((c) => c.id === "AGENT-TEAM-ARCH-001")!;
+    const observed = observe(arch.id, arch.expected_invariants, arch.forbidden_behaviors, obs({ ledger: FULL_LEDGER }));
+    const result = resultFromRun(arch, observed, { timedOut: false, exitCode: 0 }, ["NOTES.md"]);
+    expect(result.score).toBe(0);
+    expect(result.detail).toContain("NOTES.md");
   });
 
   it("reports an incomplete run separately from a complete one", () => {
@@ -304,6 +328,77 @@ describe("the human-facing rubric stays in step with the code", () => {
     const readme = await fs.promises.readFile(path.resolve("bench", "rubrics", "README.md"), "utf8");
     for (const name of Object.keys(FORBIDDEN_CHECKERS)) {
       expect(readme, `the rubric must document the forbidden behavior ${name}`).toContain(`\`${name}\``);
+    }
+  });
+});
+
+describe("a judgement in the bench", () => {
+  const JUDGEMENT_LEDGER = {
+    ...FULL_LEDGER,
+    evidence: [
+      {
+        id: "EVD-0002",
+        criterionId: "AC-1",
+        kind: "judgment",
+        status: "partial",
+        digest: "sha256:abc",
+        judgment: {
+          decisionId: "JDG-1A2B3C4D",
+          verdict: "satisfied",
+          verified: true,
+          criterion: "AC-1",
+          model: "openrouter/jev",
+          thresholds: { probability: 0.9, confidence: 0.75 },
+        },
+      },
+    ],
+  };
+
+  it("reports a recorded judgement", () => {
+    expect(INVARIANT_CHECKERS["decision_judgement_recorded"]!(obs({ ledger: JUDGEMENT_LEDGER }))).toBe(true);
+    expect(INVARIANT_CHECKERS["decision_judgement_recorded"]!(obs({ ledger: FULL_LEDGER }))).toBe(false);
+  });
+
+  it("is never proof for a checker that wants a verified fact", () => {
+    // One assumption and no decision, so the only thing that could satisfy
+    // these checkers is a passing evidence row carrying proof.
+    const ledger = {
+      ...JUDGEMENT_LEDGER,
+      assumptions: [{ basis: "VERIFIED", statement: "a" }],
+      decisions: [],
+    };
+    const o = obs({ ledger });
+    expect(INVARIANT_CHECKERS["criteria_linked_evidence"]!(o)).toBe(false);
+    expect(INVARIANT_CHECKERS["distinguishes_verified_from_proposed"]!(o)).toBe(false);
+    expect(FORBIDDEN_CHECKERS["claims_unrun_tests"]!(o)).toBe(false);
+  });
+
+  it("is never counted as work claimed without a delivery", () => {
+    const o = obs({ ledger: { ...JUDGEMENT_LEDGER, activeDelivery: undefined } });
+    expect(FORBIDDEN_CHECKERS["proposes_big_bang_without_delivery"]!(o)).toBe(false);
+  });
+
+  it("collects the judgements of a run with their model, thresholds and verdict", () => {
+    const judgements = judgementsOf(obs({ ledger: JUDGEMENT_LEDGER }));
+    expect(judgements).toHaveLength(1);
+    expect(judgements[0]).toMatchObject({ decisionId: "JDG-1A2B3C4D", model: "openrouter/jev", verdict: "satisfied", criterion: "AC-1" });
+  });
+});
+
+describe("the decision bench case", () => {
+  it("is kept out of the report unless the bench is told to use decision models", () => {
+    const previous = process.env["AGENT_TEAM_BENCH_DECISIONS"];
+    delete process.env["AGENT_TEAM_BENCH_DECISIONS"];
+    expect(enabledCases().some((c) => c.id === "AGENT-TEAM-DECISION-001")).toBe(false);
+    process.env["AGENT_TEAM_BENCH_DECISIONS"] = "1";
+    expect(enabledCases().some((c) => c.id === "AGENT-TEAM-DECISION-001")).toBe(true);
+    if (previous === undefined) delete process.env["AGENT_TEAM_BENCH_DECISIONS"];
+    else process.env["AGENT_TEAM_BENCH_DECISIONS"] = previous;
+  });
+
+  it("has a coherent definition whatever the switch says", () => {
+    for (const c of loadCases()) {
+      expect(validateCaseDefinition(c)).toEqual([]);
     }
   });
 });

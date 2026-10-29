@@ -43,12 +43,15 @@ export function evaluateAcceptGate(input: {
   for (const c of input.criteria) {
     if (waivers.includes(c)) continue;
     const evs = byCriterion.get(c) ?? [];
-    if (evs.some((e) => e.status === "fail")) {
+    // A judgement is a record, not a proof: it neither satisfies nor fails a
+    // criterion, so every branch below ignores it.
+    if (evs.some((e) => e.kind !== "judgment" && e.status === "fail")) {
       failed.push(c);
       continue;
     }
     // pass requires verifiable artifact/command/digest
     const passing = evs.filter((e) => {
+      if (e.kind === "judgment") return false;
       if (e.status === "pass") return evidenceSatisfiesCriterion(e);
       if (acceptPartial && e.status === "partial") return Boolean(e.artifactRef || e.command || e.digest);
       return false;
@@ -86,6 +89,8 @@ export function evaluateAcceptGate(input: {
 /** The first evidence kind that may not support the claim. */
 function forbiddenClaimIn(evidence: EvidenceRef[], claim: string): string | undefined {
   for (const e of evidence) {
+    // A judgement never carries a claim, so it never refuses one either.
+    if (e.kind === "judgment") continue;
     if (e.status !== "pass") continue;
     const reason = forbiddenClaim(e.kind, claim);
     if (reason) return reason;

@@ -56,8 +56,8 @@ the boundary is handled deliberately:
 - **`any` is confined to the host callback boundary** — hook handlers and the
   `ctx.*.transform` editors receive loosely typed arguments from the SDK and are
   cast back to the expected shape at the call site (`tool as never`).
-- Elsewhere, prefer `unknown` plus narrowing. `unknown` appears roughly three
-  times as often as `any` in `src/`, and the difference is deliberate.
+- Elsewhere, prefer `unknown` plus narrowing. `unknown` appears about four times
+  as often as `any` in `src/`, and the difference is deliberate.
 
 ## Tool definitions
 
@@ -82,13 +82,22 @@ Rules that the tool contract depends on:
 
 - The input is a **closed** JSON Schema: `additionalProperties: false`, every
   property typed, and the `required` list is the actual minimum.
-- The definition object is frozen with `as const`.
-- The file also exports the matching Zod input schema's *name* — validation happens
-  with the Zod schema from `src/domain/schemas.ts`, not by reading the JSON Schema.
+- The definition object ends with `as const`. That is a compile-time type
+  assertion, not `Object.freeze` — the object is not frozen at runtime, and
+  nothing claims it is.
+- The file **imports** the matching Zod input schema from `src/domain/schemas.ts`
+  and validates with it, rather than reading the declared JSON Schema. The JSON
+  Schema is the contract the host sees; the Zod schema is the contract the
+  plugin enforces, and the two must agree.
+- The declared JSON Schema must list every field the execute function reads. A
+  field the handler accepts but the schema omits is unreachable through a host
+  that validates inputs — which is how `agent_team_state`'s `status` override
+  became unreachable while still passing its tests.
 - The execute function receives `rawInput: unknown` and parses it itself, so the
   validation error surfaces as a tool error rather than a host-level rejection.
 - Register the tool in `src/tools/index.ts` under the `agent_team` namespace, and
-  bump the expected tool count in `src/doctor/checks.ts`.
+  bump the expected tool count in `src/doctor/checks.ts` and in
+  `test/integration/contracts.test.ts`.
 
 ## Naming
 
@@ -121,6 +130,10 @@ the same.
   throw new Error(`unknown criterionId ${input.criterionId}; active delivery declares: ${criteria.join(", ")}`);
   throw new Error(`stale revision: expected ${expectedRevision}, actual ${current.revision}`);
   ```
+
+  The exceptions are the `Agent Team DENY: …` messages the scope and injection
+  refusals raise. Those are read by a human reading a refusal, so they are
+  capitalised and carry the prefix.
 
 - Error text is part of the contract. The gate, tool and handoff errors are read by
   models driving the plugin, and the tests assert on them.

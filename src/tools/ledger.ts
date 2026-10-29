@@ -15,7 +15,7 @@ export interface LedgerContext {
  * Opens the ledger for a mutation.
  *
  * Every ledger write goes through here, so the guard lives in one place
- * rather than in seven copies that could drift: the acting role must be the
+ * rather than in eight copies that could drift: the acting role must be the
  * ledger owner, the engagement must exist, and the caller's revision must
  * still be current. A specialist may always read; it may never write.
  */

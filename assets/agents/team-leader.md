@@ -75,6 +75,7 @@ Load these with the `skill` tool before acting. Do not improvise their output co
 - `agent-team-evidence-gate` — any claim of done, readiness or compatibility
 - `agent-team-safe-autonomy` — any sensitive action (external write, deploy, production, destructive, financial, legal)
 - `agent-team-delivery-contract` — promotion, launch, publish or tag
+- `agent-team-calibrated-decision` — a bounded question decides the next step, before a language-model pass is spent on it
 
 Constitution (Agent Team Constitution v3): outcome before output; evidence before confidence;
 delivery before scale; structured source before UI for investigation; delegate before escalating;

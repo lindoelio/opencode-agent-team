@@ -19,7 +19,7 @@ function baseCtx(root: string, overrides: Record<string, unknown> = {}): never {
     app: { version: "2.0.10" },
     model: { list: async () => [{ providerID: "opencode", id: "muse-spark-1.3" }], reload: async () => {} },
     generate: { text: async () => ({ text: "doctor-ok" }) },
-    tool: { transform: async () => ({ dispose: async () => {} }), reload: async () => {}, list: async () => [{ id: "agent_team_state" }, { id: "agent_team_record_assumption" }, { id: "agent_team_record_decision" }, { id: "agent_team_submit_evidence" }, { id: "agent_team_evaluate_gate" }, { id: "agent_team_request_approval" }, { id: "agent_team_handoff" }, { id: "agent_team_define_delivery" }], hook: async () => ({ dispose: async () => {} }) },
+    tool: { transform: async () => ({ dispose: async () => {} }), reload: async () => {}, list: async () => [{ id: "agent_team_state" }, { id: "agent_team_record_assumption" }, { id: "agent_team_record_decision" }, { id: "agent_team_submit_evidence" }, { id: "agent_team_evaluate_gate" }, { id: "agent_team_evaluate_decision" }, { id: "agent_team_request_approval" }, { id: "agent_team_handoff" }, { id: "agent_team_define_delivery" }], hook: async () => ({ dispose: async () => {} }) },
     agent: { list: async () => [{ id: "team-leader" }] },
     storage: (() => {
       const data = new Map<string, unknown>();
@@ -122,7 +122,7 @@ describe("command handlers", () => {
   it("setup --plan dry-runs, status handles empty state, export previews", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-cmd-"));
     const { defs, sent } = await captureCommands(root);
-    expect(defs).toHaveLength(14);
+    expect(defs).toHaveLength(15);
     const setup = defs.find((d) => d.name === "agent-team/setup")!;
     await setup.execute({ sessionID: "s", prompt: { text: "/agent-team/setup --plan" }, delivery: "steer" } as never);
     expect(sent.join("\n")).toContain("Dry run only");

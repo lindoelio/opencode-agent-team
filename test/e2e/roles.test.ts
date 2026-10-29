@@ -41,7 +41,9 @@ describe.skipIf(!E2E_RUNNABLE)("specialists end to end (real model)", () => {
         "Design the states of a task board list: what the user sees when it is loading, when it is empty, and when it fails. Save the direction to docs/design.md.",
       );
       expect(run.timedOut).toBe(false);
-      expect(run.trace.skillsLoaded).toContain("agent-team-design-direction");
+      // The designer owns no skill: its design-direction procedure was folded
+      // into the agent template, and `ROLE_SKILLS` deliberately maps the
+      // designer to an empty list. There is nothing to assert a load of here.
       expect(fileExists(ws, "docs/design.md")).toBe(true);
       const design = (readFile(ws, "docs/design.md") ?? "").toLowerCase();
       expect(design).toMatch(/loading/);

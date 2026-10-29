@@ -15,24 +15,27 @@ session, and it keeps its own state in the project directory.
 flowchart TD
   Host["OpenCode host — 2.0.x, 2.1.x or 2.2.x"]
   Entry["src/index.ts — Plugin.define"]
-  Commands["catalog — 14 commands"]
-  Skills["catalog — 17 skills"]
-  Tools["tools — 8 agent_team tools"]
+  Commands["catalog — 15 commands"]
+  Skills["catalog — 18 skills"]
+  Tools["tools — 9 agent_team tools"]
   Hooks["hooks — context, prompt, permission, retry, tool-audit"]
   Domain["domain — authority, gates, evidence, scope, state machine, schemas"]
   Ledger["ledger — store, events, projection, redaction, migrations"]
   Setup["bootstrap — setup plan and apply"]
   Doctor["doctor — preflight checks"]
+  Decision["decision — discovery, protocol, screen, cache"]
   State[".agent-team/state.json"]
   Events[".agent-team/ledger/events.jsonl"]
-  Docs[".agent-team — decisions, deliveries, evidence"]
+  Docs[".agent-team — decisions, deliveries, evidence, judgements"]
 
   Host --> Entry
   Entry --> Commands
   Entry --> Skills
   Entry --> Tools
   Entry --> Hooks
-  Tools --> Domain
+  Entry --> Decision
+  Tools --> Decision
+  Decision --> Domain
   Tools --> Ledger
   Hooks --> Domain
   Hooks --> Ledger
@@ -74,14 +77,16 @@ Two consequences shape the code:
 | `src/ledger/` | The event store, the hash chain, the projection, redaction, migrations, schema generation |
 | `src/bootstrap/` | `/agent-team/setup`: planning and applying the native agent files and project config |
 | `src/doctor/` | Preflight checks and the report renderer |
+| `src/decision/` | The decision capability: catalog discovery, the host protocol, the state screen and the held decisions |
 | `src/compat/` | Host version and host API surface detection |
 | `src/util/` | Paths and containment, atomic writes, hashing, id generation |
 
 The dependency direction is one-way: `src/util/` imports nothing from the project and
 `src/domain/` imports only from `src/domain/` and `zod`; `src/ledger/` depends on
-`domain/` and `util/`; `tools/` and `hooks/` depend on both. `domain/` never imports
-from `tools/`, which is what keeps the gate algebra and the authority matrix
-testable without a host.
+`domain/` and `util/`; `src/decision/`, `tools/` and `hooks/` depend on both.
+`domain/` never imports from `tools/` or `src/decision/`, which is what keeps the
+gate algebra, the authority matrix and the decision verdict testable without a
+host.
 
 ## The ledger
 
@@ -89,14 +94,16 @@ State is event-sourced. `.agent-team/` holds:
 
 ```
 .agent-team/
+  README.md               # what the directory is
   state.json              # the current projection
   ledger/events.jsonl     # append-only, hash-chained event log
   decisions/              # DEC-0001.md
   deliveries/             # DEL-001.yaml
   evidence/               # EVD-0001.json, artifacts/
+  judgements/             # JDG-XXXXXXXX.json — one per executed decision
   approvals/
   exports/
-  setup-backups/          # created when a state file is migrated
+  setup-backups/          # created by setup and by a state file migration
 ```
 
 `state.json` is derived. `ledger/events.jsonl` is the source of truth. Every event
@@ -134,6 +141,21 @@ Every mutating tool follows the same three steps, and the guard lives in one pla
 3. **Append** the event (`appendEvent`), which redacts the payload, extends the
    hash chain, and writes both the event log and the new projection.
 
+Two paths do not go through `openLedger`, both by design:
+
+- `agent_team_state` with `action: "initialize"` asserts the ledger owner and
+  then calls `initializeState`. There is no revision to check — there is no
+  state yet — and initialising twice is idempotent.
+- `/agent-team/guard` appends its `guardrails.updated` event directly, with the
+  actor recorded as `plugin`. The operator is changing the autonomy policy
+  through the command, not the leader acting through the ledger, and routing it
+  through the leader would make a guardrail depend on a model turn.
+
+`initializeState` also writes the projection itself rather than going through
+`appendEvent`, so it applies the redactor on its own. Without that, the initial
+`state.json` would be the only unredacted write in the ledger — and it would
+disagree with the event that records the same outcome.
+
 The ledger lock (`withLedgerLock`) is **per-process**, with a five-second timeout.
 It serialises concurrent writes inside one OpenCode server. It does not protect
 against a second process — the hash chain and the revision guard are what do that,
@@ -146,6 +168,13 @@ and a broken chain fails closed.
 orchestrator" mechanical rather than a convention, and it is why parallel
 specialists cannot contend on the revision. `agent_team_handoff` with
 `action: "prepareWave"` books a whole wave in one call and therefore one revision.
+
+**One directory is the exception.** `judgements/` holds one document per
+executed decision, written by whichever specialist ran the decision. It is
+outside the hash chain, outside the revision guard and outside the owner guard,
+because a document that contends for the revision would defeat the purpose of a
+cheap first pass. The audited party can therefore edit its own judgement
+document; it is a record of what was asked, not tamper-evident proof of it.
 
 ### The projection
 
@@ -230,6 +259,10 @@ of rules; the last matching rule wins.
 - Only the **integrity rules** may return `DENY`: secret exposure, unproven
   completion claims, instructions found in untrusted content, and non-orchestrator
   creation of `team-leader/*` agents. `DENY` is final.
+- A trailing check outside the rule list denies anything whose action name
+  mentions a credential (`secret`, `token`, `bearer`, `password`) *and* exposure
+  (`expos`), even when no listed rule matched it. It is a backstop: an action
+  named `expose-token` is denied without anyone having to write a rule for it.
 - `ASK` is not produced by the base matrix. It comes only from a user-registered
   guardrail (`autonomy.askBefore`, `/agent-team/guard`) or the explicit
   `autonomy.mode: "guarded"` opt-in.
@@ -253,7 +286,7 @@ worker, reviewer, security and release specialists.
 - The **templates** in `assets/agents/` are the source. `/agent-team/setup`
   materializes them into `.opencode/agents/`, preserving a user-edited file and
   reporting it as drifted rather than overwriting it.
-- The **skill map** in `src/catalog/skills.ts` maps 17 skills onto roles. It is
+- The **skill map** in `src/catalog/skills.ts` maps 18 skills onto roles. It is
   injected into the role's system prompt, so skill awareness is deterministic
   rather than remembered. The map and the templates' `## Skills` blocks are
   compared by a test, so they cannot drift apart silently.
@@ -290,7 +323,7 @@ artifacts the run produced.
 - **Scoring is honest about what it measured.** A dimension the case does not
   exercise is reported as `null`, not zero. A run that was cut off is reported as
   incomplete and excluded from the mean. Only `authority`, `evidence` and
-  `tool_economy` are machine-scored; `decision_quality` and `communication` need
+  `tool_economy` and `calibration` are machine-scored; `decision_quality` and `communication` need
   a human and are reported as unscored.
 
 `bench/rubrics/README.md` is the human-facing contract and must stay in step with

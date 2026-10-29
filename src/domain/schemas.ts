@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DECISION_USES } from "./decision-model.js";
 
 export const PhaseSchema = z.enum([
   "INTENT",
@@ -144,10 +145,52 @@ export const GateRefSchema = z.object({
 });
 export type GateRef = z.infer<typeof GateRefSchema>;
 
+/**
+ * One answer of a calibrated decision.
+ *
+ * The plugin's own union, so a decision is recorded in the same shape
+ * whichever provider answered it.
+ */
+export const JudgmentAnswerSchema = z.object({
+  name: z.string(),
+  type: z.enum(["predicate", "choice", "score", "error"]),
+  probability: z.number().optional(),
+  confidence: z.number().optional(),
+  choice: z.union([z.string(), z.boolean()]).optional(),
+  optionProbabilities: z.record(z.string(), z.number()).optional(),
+  levelProbabilities: z.array(z.object({ value: z.number(), label: z.string(), probability: z.number() })).optional(),
+  levelScore: z.number().optional(),
+  reason: z.string().optional(),
+});
+
+/**
+ * A judgement: the record of one calibrated decision.
+ *
+ * It is a record, not a proof. It never satisfies a criterion and never
+ * supports a claim, so the fields below exist for the audit trail.
+ */
+export const JudgmentBlockSchema = z.object({
+  model: z.string(),
+  answers: z.array(JudgmentAnswerSchema),
+  role: z.string(),
+  use: z.enum(DECISION_USES),
+  thresholds: z.object({ probability: z.number(), confidence: z.number() }),
+  criterion: z.string().min(1),
+  decisionId: z.string().min(1),
+  verdict: z.enum(["satisfied", "unanswered", "escalate"]),
+  verified: z.boolean(),
+  stateDigest: z.string(),
+  rationale: z.string(),
+  elapsedMs: z.number(),
+  usage: z.object({ input: z.number(), output: z.number() }),
+});
+
+export type JudgmentBlock = z.infer<typeof JudgmentBlockSchema>;
+
 export const EvidenceRefSchema = z.object({
   id: z.string(),
   criterionId: z.string().min(1),
-  kind: z.enum(["test", "runtime", "visual", "source", "review", "release", "document", "metric"]),
+  kind: z.enum(["test", "runtime", "visual", "source", "review", "release", "document", "metric", "judgment"]),
   status: z.enum(["pass", "fail", "partial", "skipped"]),
   summary: z.string().min(1),
   artifactRef: z.string().optional(),
@@ -155,6 +198,7 @@ export const EvidenceRefSchema = z.object({
   digest: z.string().optional(),
   observedAt: z.string(),
   limitations: z.array(z.string()).default([]),
+  judgment: JudgmentBlockSchema.optional(),
 });
 export type EvidenceRef = z.infer<typeof EvidenceRefSchema>;
 
@@ -206,6 +250,23 @@ export const SpecialistResultSchema = z
     risks: z.array(z.string()),
     unknowns: z.array(z.string()),
     recommended_next_action: z.string().min(1),
+    /**
+     * The decisions the specialist executed.
+     *
+     * The identifier and the block, so the leader can record the judgement
+     * without re-running the decision. A malformed block degrades to no
+     * decision rather than refusing the handoff.
+     */
+    decisions: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          criterion: z.string().min(1),
+          verdict: z.enum(["satisfied", "unanswered", "escalate"]),
+          judgment: JudgmentBlockSchema.optional(),
+        }),
+      )
+      .optional(),
   })
   .strict();
 export type SpecialistResult = z.infer<typeof SpecialistResultSchema>;
@@ -374,7 +435,7 @@ export const DefineDeliveryInputSchema = z
 export const SubmitEvidenceInputSchema = z  .object({
     expectedRevision: z.number().int().min(0),
     criterionId: z.string().min(1),
-    kind: z.enum(["test", "runtime", "visual", "source", "review", "release", "document", "metric"]),
+    kind: z.enum(["test", "runtime", "visual", "source", "review", "release", "document", "metric", "judgment"]),
     status: z.enum(["pass", "fail", "partial", "skipped"]),
     summary: z.string().min(1),
     artifactRef: z.string().optional(),
@@ -382,6 +443,72 @@ export const SubmitEvidenceInputSchema = z  .object({
     digest: z.string().optional(),
     observedAt: z.string().min(1),
     limitations: z.array(z.string()).optional(),
+    /** The decision this row records. The plugin resolves the block itself. */
+    decisionId: z.string().optional(),
+    /** The block the specialist reported, used when the plugin holds no record of the decision. */
+    judgment: JudgmentBlockSchema.optional(),
+  })
+  .strict();
+
+/**
+ * The decision tool's input.
+ *
+ * The criterion is required: a decision with no criterion has nothing to bind
+ * to, and could be spent on any criterion later.
+ */
+export const DecisionQuestionSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("predicate"),
+      name: z.string().min(1),
+      instructions: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("choice"),
+      name: z.string().min(1),
+      instructions: z.string().min(1),
+      choices: z
+        .array(
+          z
+            .object({
+              value: z.union([z.string(), z.boolean()]),
+              description: z.string().optional(),
+            })
+            .strict(),
+        )
+        .min(1),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("score"),
+      name: z.string().min(1),
+      instructions: z.string().min(1),
+      levels: z
+        .array(
+          z
+            .object({
+              label: z.string().min(1),
+              description: z.string().optional(),
+            })
+            .strict(),
+        )
+        .min(1),
+    })
+    .strict(),
+]);
+
+export const EvaluateDecisionInputSchema = z
+  .object({
+    criterionId: z.string().min(1),
+    state: z.string().min(1),
+    questions: z.array(DecisionQuestionSchema).min(1),
+    /** A stricter use than the caller's role carries. Never a looser one. */
+    use: z.enum(DECISION_USES).optional(),
+    /** A pinned decision model, as `provider/model`. */
+    model: z.string().optional(),
   })
   .strict();
 

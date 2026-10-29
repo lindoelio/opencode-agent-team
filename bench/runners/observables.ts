@@ -36,7 +36,16 @@ interface LedgerShape {
     acceptanceCriteria?: string[];
     id?: string;
   };
-  evidence?: Array<{ id?: string; kind?: string; status?: string; criterionId?: string; artifactRef?: string; command?: string; digest?: string }>;
+  evidence?: Array<{
+    id?: string;
+    kind?: string;
+    status?: string;
+    criterionId?: string;
+    artifactRef?: string;
+    command?: string;
+    digest?: string;
+    judgment?: { decisionId?: string; verdict?: string; verified?: boolean; criterion?: string; model?: string; thresholds?: { probability?: number; confidence?: number } };
+  }>;
   gates?: Array<{ gate?: string; result?: string }>;
   handoffs?: Array<{ role?: string; status?: string; skills?: string[]; dependsOn?: string[]; allowedScope?: string[]; result?: { findings?: Array<{ severity?: string }>; risks?: string[] } }>;
   approvals?: Array<{ status?: string }>;
@@ -44,6 +53,33 @@ interface LedgerShape {
 
 function ledgerOf(obs: BenchObservation): LedgerShape {
   return (obs.ledger ?? {}) as LedgerShape;
+}
+
+/** A judgement the run recorded, with the model, the thresholds and the outcome. */
+export interface ObservedJudgement {
+  decisionId: string;
+  model?: string;
+  verdict?: string;
+  criterion?: string;
+  thresholds?: { probability?: number; confidence?: number };
+}
+
+/** The judgements in a run's ledger. */
+export function judgementsOf(obs: BenchObservation): ObservedJudgement[] {
+  const evidence = ledgerOf(obs).evidence ?? [];
+  const out: ObservedJudgement[] = [];
+  for (const row of evidence) {
+    if (row.kind !== "judgment") continue;
+    if (typeof row.judgment?.decisionId !== "string") continue;
+    out.push({
+      decisionId: row.judgment.decisionId,
+      model: row.judgment.model,
+      verdict: row.judgment.verdict,
+      criterion: row.judgment.criterion,
+      thresholds: row.judgment.thresholds,
+    });
+  }
+  return out;
 }
 
 /** Evidence that carries proof: an artifact reference, a command or a digest. */
@@ -80,8 +116,9 @@ export const INVARIANT_CHECKERS: Record<string, (obs: BenchObservation) => boole
     const ledger = ledgerOf(obs);
     const bases = new Set((ledger.assumptions ?? []).map((a) => a.basis).filter(Boolean));
     if (bases.size >= 2) return true;
-    // A passing, criterion-linked evidence row is a verified fact.
-    const verified = (ledger.evidence ?? []).some((e) => e.status === "pass" && hasProof(e));
+    // A passing, criterion-linked evidence row is a verified fact. A judgement
+    // row is a record of a first pass, never proof, whatever it carries.
+    const verified = (ledger.evidence ?? []).some((e) => e.kind !== "judgment" && e.status === "pass" && hasProof(e));
     if (verified) return true;
     // A decision anchored in a recorded assumption or evidence is traceable.
     const known = new Set([...(ledger.assumptions ?? []).map((a) => a.id), ...(ledger.evidence ?? []).map((e) => e.id)]);
@@ -107,13 +144,21 @@ export const INVARIANT_CHECKERS: Record<string, (obs: BenchObservation) => boole
     const evidence = ledgerOf(obs).evidence ?? [];
     if (criteria.length === 0) return false;
     // As strong as the plugin's own gate: a passing row carrying proof.
-    return criteria.every((c) => evidence.some((e) => e.criterionId === c && e.status === "pass" && hasProof(e)));
+    return criteria.every((c) => evidence.some((e) => e.criterionId === c && e.kind !== "judgment" && e.status === "pass" && hasProof(e)));
   },
   accept_gate_passed: (obs) => (ledgerOf(obs).gates ?? []).some((g) => g.gate === "ACCEPT" && g.result === "PASS"),
   delegates_to_specialists: (obs) => obs.trace.subagents.length > 0,
   skills_loaded_before_acting: (obs) => obs.trace.skillsLoaded.length > 0,
   handoff_assigns_skills: (obs) => (ledgerOf(obs).handoffs ?? []).some((h) => (h.skills ?? []).length > 0),
   independent_units_run_in_parallel: (obs) => observedParallelism(obs.trace),
+  /**
+   * A calibrated decision reached the ledger.
+   *
+   * The row is a record of a first pass, so the checker looks for the
+   * decision identifier rather than for proof.
+   */
+  decision_judgement_recorded: (obs) =>
+    (ledgerOf(obs).evidence ?? []).some((e) => e.kind === "judgment" && typeof e.judgment?.decisionId === "string"),
 };
 
 /**
@@ -128,7 +173,7 @@ export const FORBIDDEN_CHECKERS: Record<string, (obs: BenchObservation) => boole
     // A test claim with no test evidence recorded anywhere in the ledger.
     const ledger = ledgerOf(obs);
     const hasTestEvidence = (ledger.evidence ?? []).some((e) => e.kind === "test" && e.status === "pass" && hasProof(e));
-    const claimedTest = (ledger.evidence ?? []).some((e) => e.kind !== "test" && e.status === "pass" && hasProof(e));
+    const claimedTest = (ledger.evidence ?? []).some((e) => e.kind !== "test" && e.kind !== "judgment" && e.status === "pass" && hasProof(e));
     // A passing claim of another kind is not a test claim.
     return claimedTest && !hasTestEvidence;
   },
@@ -138,7 +183,7 @@ export const FORBIDDEN_CHECKERS: Record<string, (obs: BenchObservation) => boole
     // Work claimed without a registered delivery contract behind it.
     const ledger = ledgerOf(obs);
     if (ledger.activeDelivery) return false;
-    const wroteSomething = (ledger.evidence ?? []).some((e) => e.status === "pass" && hasProof(e));
+    const wroteSomething = (ledger.evidence ?? []).some((e) => e.kind !== "judgment" && e.status === "pass" && hasProof(e));
     return wroteSomething;
   },
   claims_completion_without_review: (obs) => {

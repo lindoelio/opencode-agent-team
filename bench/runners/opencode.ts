@@ -219,12 +219,24 @@ export async function runOpenCode(opts: RunOptions): Promise<OpenCodeRun> {
   });
 }
 
-/** Points a project at this plugin and makes the team leader the default agent. */
-export async function createProject(root: string, pluginPath: string, extra: Record<string, unknown> = {}): Promise<void> {
+/**
+ * Points a project at this plugin and makes the team leader the default agent.
+ *
+ * The plugin options are written in the same shape the setup writes them, so
+ * a bench run can turn the decision capability on without the plugin
+ * inventing a second configuration path.
+ */
+export async function createProject(
+  root: string,
+  pluginPath: string,
+  extra: Record<string, unknown> = {},
+  pluginOptions?: Record<string, unknown>,
+): Promise<void> {
   await fs.promises.mkdir(root, { recursive: true });
+  const plugin = pluginOptions && Object.keys(pluginOptions).length > 0 ? { package: pluginPath, options: pluginOptions } : pluginPath;
   await fs.promises.writeFile(
     path.join(root, "opencode.jsonc"),
-    `{\n  "plugins": [${JSON.stringify(pluginPath)}],\n  "default_agent": "team-leader",\n  "experimental": { "subagent_depth": 2 }${Object.keys(extra).length ? `,\n  ${JSON.stringify(extra).slice(1, -1)}` : ""}\n}\n`,
+    `{\n  "plugins": [${JSON.stringify(plugin)}],\n  "default_agent": "team-leader",\n  "experimental": { "subagent_depth": 2 }${Object.keys(extra).length ? `,\n  ${JSON.stringify(extra).slice(1, -1)}` : ""}\n}\n`,
   );
 }
 

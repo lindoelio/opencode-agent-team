@@ -1,8 +1,7 @@
 import * as fs from "node:fs";
-import { homedir } from "node:os";
 import { loadTemplates } from "../catalog/agents.js";
 import { backupFile, checksumOf, isManaged, mergeProjectConfig, planStaleManagedFiles, stripHeader, withHeader } from "./jsonc.js";
-import { resolveTargetAbs, type SetupOptions } from "./plan.js";
+import { resolveTargetAbs, targetRoot, type SetupOptions } from "./plan.js";
 import { LEGACY_MANAGED_AGENT_FILES } from "./managed-files.js";
 import { atomicWriteFile } from "../util/atomic-file.js";
 
@@ -26,16 +25,21 @@ export interface ApplyResult {
   skipped: string[];
   backups: string[];
   configChanged: boolean;
+  warnings: string[];
 }
 
 export async function applySetupPlan(opts: SetupOptions): Promise<ApplyResult> {
-  const root = opts.scope === "global" ? (opts.homeDir ?? homedir()) : opts.projectRoot;
+  // The same root the plan was built against. Resolving it twice, with two
+  // different rules, made the dry run and the apply disagree when `HOME` was
+  // unset.
+  const root = targetRoot(opts);
   const templates = await loadTemplates();
   const created: string[] = [];
   const updated: string[] = [];
   const removed: string[] = [];
   const skipped: string[] = [];
   const backups: string[] = [];
+  const warnings: string[] = [];
 
   for (const [rel, template] of templates) {
     // --update: only touch managed-undrifted files.
@@ -46,8 +50,10 @@ export async function applySetupPlan(opts: SetupOptions): Promise<ApplyResult> {
     } catch {
       existing = null;
     }
-    if (opts.updateOnly && existing !== null && isManaged(existing) === null) {
-      skipped.push(rel);
+    if (opts.updateOnly && existing === null) {
+      // `--update` refreshes the installed roster; it does not add the files
+      // a newer version of the plugin introduced.
+      warnings.push(`not created (not installed): ${rel}`);
       continue;
     }
     if (existing !== null && isManaged(existing) === null) {
@@ -105,5 +111,5 @@ export async function applySetupPlan(opts: SetupOptions): Promise<ApplyResult> {
       configChanged = true;
     }
   }
-  return { created, updated, removed, skipped, backups, configChanged };
+  return { created, updated, removed, skipped, backups, configChanged, warnings };
 }

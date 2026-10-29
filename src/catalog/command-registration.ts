@@ -1,12 +1,16 @@
 import { AGENT_TEAM_COMMANDS, parseCommandArgs } from "./commands.js";
+import { packageVersion } from "./agents.js";
 import { applySetupPlan } from "../bootstrap/apply.js";
 import { buildSetupPlan, renderPlanText } from "../bootstrap/plan.js";
 import { runDoctor, renderDoctorReport } from "../doctor/checks.js";
+import { resolveDecisionGenerator } from "../compat/host.js";
+import { decisionReport, renderDecisionListing, thresholdsLine } from "../decision/catalog.js";
+import { decisionOptions } from "../options.js";
 import { appendEvent, readState, storeContext } from "../ledger/store.js";
 import { project } from "../ledger/projection.js";
 import { projectRootOf, type AgentTeamRuntime } from "../runtime.js";
 
-const PLUGIN_PACKAGE = "@lindoelio/opencode-agent-team@0.3.0";
+const PLUGIN_PACKAGE = `@lindoelio/opencode-agent-team@${packageVersion()}`;
 
 async function sendSessionText(runtime: AgentTeamRuntime, sessionID: string, text: string): Promise<void> {
   await runtime.ctx.session.synthetic({ sessionID, text } as never);
@@ -54,7 +58,7 @@ export async function registerCommands(runtime: AgentTeamRuntime): Promise<{ dis
                 },
                 includePluginOptions: true,
               });
-              await sendSessionText(runtime, sessionID, `Agent Team setup applied.\nCreated: ${result.created.join(", ") || "(none)"}\nUpdated: ${result.updated.join(", ") || "(none)"}\nRemoved (previous roster): ${result.removed.join(", ") || "(none)"}\nSkipped (user content): ${result.skipped.join(", ") || "(none)"}\nBackups: ${result.backups.length}\nConfig changed: ${result.configChanged}\n\nReload OpenCode and run /agent-team/doctor.`);
+              await sendSessionText(runtime, sessionID, `Agent Team setup applied.\nCreated: ${result.created.join(", ") || "(none)"}\nUpdated: ${result.updated.join(", ") || "(none)"}\nRemoved (previous roster): ${result.removed.join(", ") || "(none)"}\nSkipped (user content): ${result.skipped.join(", ") || "(none)"}\nBackups: ${result.backups.length}\nConfig changed: ${result.configChanged}${result.warnings.length > 0 ? `\nWarnings: ${result.warnings.join("; ")}` : ""}\n\nReload OpenCode and run /agent-team/doctor.`);
               return;
             }
             await sendSessionText(runtime, sessionID, `${renderPlanText(plan)}\n\nDry run only. Re-run with --apply to write.`);
@@ -110,6 +114,16 @@ export async function registerCommands(runtime: AgentTeamRuntime): Promise<{ dis
             await sendSessionText(runtime, sessionID, renderDoctorReport(report));
             return;
           }
+          if (cmd.name === "agent-team/decisions") {
+            const root = projectRootOf(runtime.ctx);
+            const options = decisionOptions(runtime.options);
+            const surface = resolveDecisionGenerator(runtime.ctx);
+            const state = await readState(root);
+            const judgementRows = state?.evidence.filter((e) => e.kind === "judgment").length ?? 0;
+            const report = await decisionReport(runtime.ctx, root, surface.available, judgementRows);
+            await sendSessionText(runtime, sessionID, renderDecisionListing(report, thresholdsLine("team-leader", options)));
+            return;
+          }
           if (cmd.name === "agent-team/status") {
             const state = await readState(projectRootOf(runtime.ctx));
             if (!state) {
@@ -123,7 +137,7 @@ export async function registerCommands(runtime: AgentTeamRuntime): Promise<{ dis
             return;
           }
           if (cmd.name === "agent-team/export") {
-            await sendSessionText(runtime, sessionID, "Agent Team export: choose bundle (status | decision-log | evidence | release-readiness | retrospective). Files/fields preview + redaction applied before writing to .agent-team/exports/. Re-run with the bundle name as argument to generate.");
+            await sendSessionText(runtime, sessionID, "Agent Team export: choose bundle (status | decision-log | evidence | delivery-readiness | retrospective). Files/fields preview + redaction applied before writing to .agent-team/exports/. Re-run with the bundle name as argument to generate.");
             return;
           }
           // Loop commands: structured prompt to agent-team in the current session.

@@ -27,6 +27,22 @@ export function packageRoot(): string {
   return path.resolve(here, "..", "..");
 }
 
+/**
+ * The version of the installed package, read from its own manifest.
+ *
+ * A hardcoded version string drifts from `package.json` on every release, and
+ * a stale one writes the wrong plugin spec into a consumer's config. The
+ * manifest is the only source of truth, so the version is read from it.
+ */
+export function packageVersion(root: string = packageRoot()): string {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as { version?: string };
+    return manifest.version ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 export async function loadTemplates(): Promise<Map<string, string>> {
   const root = packageRoot();
   const out = new Map<string, string>();

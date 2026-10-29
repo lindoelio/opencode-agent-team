@@ -4,6 +4,7 @@ import {
   hostHasRequiredSurface,
   hostVersionSupport,
   parseHostVersion,
+  resolveDecisionGenerator,
   resolveTextGenerator,
   SUPPORTED_HOST_LINES,
   SUPPORTED_SDK_RANGE,
@@ -92,5 +93,35 @@ describe("host compatibility", () => {
     const incomplete = { ...complete, storage: undefined };
     expect(hostHasRequiredSurface(incomplete)).toBe(false);
     expect(describeHostCapabilities(incomplete).some((l) => l.includes("MISSING REQUIRED"))).toBe(true);
+  });
+
+  it("resolves the decision surface when the host exposes one", async () => {
+    const decisions = async (input: unknown) => ({ answers: [{ type: "predicate", name: "q", probability: 0.9 }], echoed: input });
+    const surface = resolveDecisionGenerator({ experimental: { generate: { decisions } } });
+    expect(surface.available).toBe(true);
+    const result = (await surface.generator!.decisions({ model: { id: "m", providerID: "p" } })) as { answers: unknown[] };
+    expect(result.answers).toHaveLength(1);
+  });
+
+  it("reports a host without the decision surface as unavailable rather than failing", () => {
+    expect(resolveDecisionGenerator({}).available).toBe(false);
+    expect(resolveDecisionGenerator({ experimental: { generate: {} } }).available).toBe(false);
+    expect(resolveDecisionGenerator({ experimental: { generate: { decisions: "not a function" } } }).available).toBe(false);
+  });
+
+  it("never requires the decision surface, so a host without it still passes the preflight", () => {
+    const withoutDecisions = {
+      experimental: { generate: { text: () => {} } },
+      session: { hook: () => {} },
+      tool: { hook: () => {} },
+      command: { transform: () => {} },
+      skill: { transform: () => {} },
+      storage: {},
+      model: { list: () => {} },
+      agent: { list: () => {} },
+    };
+    expect(hostHasRequiredSurface(withoutDecisions)).toBe(true);
+    expect(describeHostCapabilities(withoutDecisions).some((l) => l.startsWith("MISSING REQUIRED"))).toBe(false);
+    expect(describeHostCapabilities(withoutDecisions)).not.toContain("present: experimental.generate.decisions");
   });
 });

@@ -67,12 +67,17 @@ export const AGENT_TEAM_COMMANDS: AgentTeamCommand[] = [
   {
     name: "agent-team/setup",
     description: "Plan/apply/update native agent files and project config",
-    prompt: p(`You are Agent Team setup. Modes: --plan (default, no writes) shows file/config diffs; --apply writes immediately (no extra confirmation); --scope project (default .opencode/agents/) or global (~/.config/opencode/agents/); --set-default sets default_agent team-leader; --no-default installs the roster without changing default; --update refreshes only managed-undrifted files; --remove plans removal, never deletes user-modified files. Files installed by a previous version of the plugin (the old agent-team roster) are removed on apply so the project never keeps two rosters; a file the user edited is preserved and reported as skipped. The plugin pins no model: agents inherit the OpenCode harness default unless the user configures model: in opencode.jsonc or edits an agent file. Preserve comments/order/keys in opencode.jsonc; backup to .agent-team/setup-backups/<ts>/; validate JSONC; evidence with opencode debug config + debug agents output.`),
+    prompt: p(`You are Agent Team setup. Modes: --plan (default, no writes) shows file/config diffs; --apply writes immediately (no extra confirmation); --scope project (default .opencode/agents/) or global (~/.config/opencode/agents/); --set-default sets default_agent team-leader; --no-default installs the roster without changing default; --update refreshes only the files already installed and managed, and does not create the ones a newer version introduced. Files installed by a previous version of the plugin (the old agent-team roster) are removed on apply so the project never keeps two rosters; a file the user edited is preserved and reported as skipped. The plugin pins no model: agents inherit the OpenCode harness default unless the user configures model: in opencode.jsonc or edits an agent file. Preserve comments/order/keys in opencode.jsonc; backup to .agent-team/setup-backups/<ts>/; validate JSONC; evidence with opencode debug config + debug agents output.`),
   },
   {
     name: "agent-team/doctor",
     description: "Verify OpenCode, plugin, model, variants, permissions, storage",
     prompt: p(`You are Agent Team doctor. Verify: OpenCode version compat, plugin/API version, a model resolvable from the active catalog (the plugin pins none), configured reasoning efforts present in the catalog, simple text generation on the harness default model, mutation-free tool call, structured output, reasoning at the configured effort, child agent invocation, storage write/read/remove in a diagnostic namespace. No destructive shell or external write from the doctor itself. Report PASS|DEGRADED|FAIL per line plus one recommended action.`),
+  },
+  {
+    name: "agent-team/decisions",
+    description: "List the decision models available, the thresholds in force and the judgement rows recorded",
+    prompt: p(`You are Agent Team decisions. List the decision models the host exposes, the thresholds in force for each role, and the judgement rows the ledger holds. A judgement is a first pass: it routes and escalates, and it never approves a criterion.`),
   },
   {
     name: "agent-team/export",

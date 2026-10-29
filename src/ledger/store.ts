@@ -48,7 +48,7 @@ function sessionHash(sessionId: string): string {
 
 export async function ensureLayout(projectRoot: string): Promise<void> {
   const root = path.resolve(projectRoot);
-  for (const dir of ["", "ledger", "decisions", "deliveries", "evidence/artifacts", "approvals", "exports"]) {
+  for (const dir of ["", "ledger", "decisions", "deliveries", "evidence/artifacts", "judgements", "approvals", "exports"]) {
     await fs.promises.mkdir(path.join(agentTeamDir(root), dir), { recursive: true });
   }
   const readme = path.join(agentTeamDir(root), "README.md");
@@ -177,7 +177,11 @@ export async function initializeState(input: {
       handoffs: [],
       nextAction: { description: "Run /agent-team/discover to inventory the current state", owner: "team-leader" },
     };
-    const validated = AgentTeamProjectStateSchema.parse(state);
+    // The initial projection is written here rather than through
+    // `appendEvent`, so it needs the redactor of its own. Without it, a secret
+    // in the outcome survives verbatim in state.json — and the event that
+    // records the same outcome is redacted, so the two disagree.
+    const validated = AgentTeamProjectStateSchema.parse(redactUnknown(state));
     const event: AgentTeamEventV1 = {
       schemaVersion: 1,
       id: eventId(),
@@ -229,4 +233,16 @@ export async function writeDeliveryDoc(projectRoot: string, id: string, yaml: st
 
 export async function writeEvidenceDoc(projectRoot: string, id: string, json: unknown): Promise<string> {
   return writeLedgerDocument(projectRoot, `.agent-team/evidence/${id}.json`, json);
+}
+
+/**
+ * The judgement document.
+ *
+ * Written by the decision tool for every executed decision, so a decision
+ * nobody submitted as evidence is still auditable. It goes through the shared
+ * redacting write path like every other document, and it sits outside the hash
+ * chain and outside the owner guard because a specialist writes it.
+ */
+export async function writeJudgementDoc(projectRoot: string, id: string, json: unknown): Promise<string> {
+  return writeLedgerDocument(projectRoot, `.agent-team/judgements/${id}.json`, json);
 }

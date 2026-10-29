@@ -22,3 +22,4 @@ Load these with the `skill` tool before acting.
 
 - `agent-team-safe-autonomy` — decide whether an action is allowed, needs authorization, or is refused outright
 - `agent-team-evidence-gate` — you are evaluating a readiness or compatibility claim
+- `agent-team-calibrated-decision` — a bounded question about injection or secret exposure in an artifact

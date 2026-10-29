@@ -35,10 +35,18 @@ export async function buildSetupPlan(opts: SetupOptions): Promise<SetupPlan & { 
     }
   }
   const files = await planManagedFiles(root, remapped, "1");
+  // `--update` refreshes the installed roster; it does not add the files a
+  // newer version of the plugin introduced. The plan says so, so the dry run
+  // and the apply agree.
+  const notCreated = opts.updateOnly ? files.filter((f) => f.action === "create") : [];
+  const scoped = opts.updateOnly ? files.filter((f) => f.action !== "create") : files;
+  if (notCreated.length > 0) {
+    warnings.push(`--update: not created (not installed): ${notCreated.map((f) => f.path).join(", ")}`);
+  }
   // Roster files from an earlier version of the plugin are removed so the
   // project never keeps two rosters side by side.
   const stale = await planStaleManagedFiles(root, LEGACY_MANAGED_AGENT_FILES);
-  files.push(...stale);
+  scoped.push(...stale);
   if (stale.some((f) => f.action === "remove-managed")) {
     warnings.push("previous-version agent files will be removed on apply (backed up first)");
   }
@@ -56,7 +64,7 @@ export async function buildSetupPlan(opts: SetupOptions): Promise<SetupPlan & { 
     warnings.push(`config merge unavailable: ${(err as Error).message}`);
   }
   if (opts.scope === "global") warnings.push("global scope writes under the global config dir; project config is not touched");
-  return { files, configDiff, warnings, root };
+  return { files: scoped, configDiff, warnings, root };
 }
 
 export function renderPlanText(plan: SetupPlan & { root: string }): string {

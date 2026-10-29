@@ -45,8 +45,37 @@ describe("setup bootstrap", () => {
     expect(content).toContain("USER EDITED");
     expect(result2.skipped.join()).toContain(".opencode/agents/team-leader.md");
   });
-  it("lets the user pin a model in an agent file without the setup overwriting it", async () => {
+  it("refreshes installed files under --update without creating the ones that are missing", async () => {
+    // `--update` is documented as a refresh of the installed roster. If it
+    // created missing files too, it would be indistinguishable from `--apply`
+    // and the flag would mean nothing.
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-setup-"));
+    const base = {
+      scope: "project" as const,
+      setDefault: false,
+      projectRoot: root,
+      pluginPackage: "@lindoelio/opencode-agent-team@0.4.0",
+      pluginOptions: {},
+      includePluginOptions: false,
+    };
+    const applied = await applySetupPlan({ ...base, updateOnly: false });
+    expect(applied.created.length).toBeGreaterThan(0);
+
+    // A file a newer plugin version introduced is not installed yet.
+    const missing = path.join(root, ".opencode", "agents", "team-leader", "newcomer.md");
+    await fs.promises.rm(path.join(root, ".opencode", "agents", "team-leader", "coder.md"));
+
+    const plan = await buildSetupPlan({ ...base, updateOnly: true });
+    expect(plan.files.some((f) => f.path === ".opencode/agents/team-leader/coder.md" && f.action === "create")).toBe(false);
+    expect(plan.warnings.join()).toContain(".opencode/agents/team-leader/coder.md");
+
+    const result = await applySetupPlan({ ...base, updateOnly: true });
+    expect(result.created).toEqual([]);
+    expect(result.warnings.join()).toContain(".opencode/agents/team-leader/coder.md");
+    expect(fs.existsSync(missing)).toBe(false);
+    expect(fs.existsSync(path.join(root, ".opencode", "agents", "team-leader.md"))).toBe(true);
+  });
+  it("lets the user pin a model in an agent file without the setup overwriting it", async () => {    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-setup-"));
     const base = {
       scope: "project" as const,
       setDefault: false,

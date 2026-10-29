@@ -25,3 +25,4 @@ Report readiness, not readiness theater: health, flow and identity proof — not
 Load these with the `skill` tool before acting.
 
 - `agent-team-delivery-contract` — prepare and execute the promotion: artifact identity, rollback and executed evidence
+- `agent-team-calibrated-decision` — a bounded readiness question about the promotion candidate

@@ -65,6 +65,207 @@
     "recommended_next_action": {
       "type": "string",
       "minLength": 1
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "criterion": {
+            "type": "string",
+            "minLength": 1
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "satisfied",
+              "unanswered",
+              "escalate"
+            ]
+          },
+          "judgment": {
+            "type": "object",
+            "properties": {
+              "model": {
+                "type": "string"
+              },
+              "answers": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "predicate",
+                        "choice",
+                        "score",
+                        "error"
+                      ]
+                    },
+                    "probability": {
+                      "type": "number"
+                    },
+                    "confidence": {
+                      "type": "number"
+                    },
+                    "choice": {
+                      "type": [
+                        "string",
+                        "boolean"
+                      ]
+                    },
+                    "optionProbabilities": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "type": "number"
+                      }
+                    },
+                    "levelProbabilities": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "value": {
+                            "type": "number"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "probability": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "value",
+                          "label",
+                          "probability"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "levelScore": {
+                      "type": "number"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "type"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "role": {
+                "type": "string"
+              },
+              "use": {
+                "type": "string",
+                "enum": [
+                  "default",
+                  "review",
+                  "security",
+                  "release"
+                ]
+              },
+              "thresholds": {
+                "type": "object",
+                "properties": {
+                  "probability": {
+                    "type": "number"
+                  },
+                  "confidence": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "probability",
+                  "confidence"
+                ],
+                "additionalProperties": false
+              },
+              "criterion": {
+                "type": "string",
+                "minLength": 1
+              },
+              "decisionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "verdict": {
+                "type": "string",
+                "enum": [
+                  "satisfied",
+                  "unanswered",
+                  "escalate"
+                ]
+              },
+              "verified": {
+                "type": "boolean"
+              },
+              "stateDigest": {
+                "type": "string"
+              },
+              "rationale": {
+                "type": "string"
+              },
+              "elapsedMs": {
+                "type": "number"
+              },
+              "usage": {
+                "type": "object",
+                "properties": {
+                  "input": {
+                    "type": "number"
+                  },
+                  "output": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "input",
+                  "output"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "model",
+              "answers",
+              "role",
+              "use",
+              "thresholds",
+              "criterion",
+              "decisionId",
+              "verdict",
+              "verified",
+              "stateDigest",
+              "rationale",
+              "elapsedMs",
+              "usage"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "criterion",
+          "verdict"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "required": [

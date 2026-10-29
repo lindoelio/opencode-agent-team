@@ -1,4 +1,7 @@
 import { resolveModelOptions } from "../catalog/model-options.js";
+import { resolveDecisionGenerator } from "../compat/host.js";
+import { decisionReport, renderDecisionContext, thresholdsLine } from "../decision/catalog.js";
+import { decisionOptions } from "../options.js";
 import { roleSkillsBlock } from "../catalog/skills.js";
 import { readState } from "../ledger/store.js";
 import { project, renderProjectionYaml } from "../ledger/projection.js";
@@ -62,6 +65,18 @@ export async function registerContextHook(runtime: AgentTeamRuntime): Promise<{ 
     }
     const skills = roleSkillsBlock(agent);
     if (skills) event.system.push({ type: "text", text: skills } as never);
+    // The decision capability, so a specialist knows a calibrated first pass is
+    // available and what bar it is held to.
+    try {
+      const options = decisionOptions(runtime.options);
+      const surface = resolveDecisionGenerator(runtime.ctx);
+      const state = await readState(root);
+      const judgementRows = state?.evidence.filter((e) => e.kind === "judgment").length ?? 0;
+      const report = await decisionReport(runtime.ctx, root, surface.available, judgementRows);
+      event.system.push({ type: "text", text: renderDecisionContext(report, thresholdsLine(agent, options)) } as never);
+    } catch {
+      // storage unavailable: continue without the decision block
+    }
     // Model, reasoning effort and output budget: applied only when the user
     // configured them. Otherwise the harness defaults stay untouched.
     const model = resolveModelOptions(runtime.options, agent);

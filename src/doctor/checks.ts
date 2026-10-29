@@ -1,9 +1,10 @@
 import { configuredReasoningEfforts } from "../catalog/model-options.js";
-import { packageRoot } from "../catalog/agents.js";
-import { describeHostCapabilities, hostHasRequiredSurface, hostVersionSupport, resolveTextGenerator, SUPPORTED_HOST_LINES, SUPPORTED_SDK_RANGE } from "../compat/host.js";
-import type { AgentTeamRuntime } from "../runtime.js";
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { packageVersion } from "../catalog/agents.js";
+import { describeHostCapabilities, hostHasRequiredSurface, hostVersionSupport, resolveDecisionGenerator, resolveTextGenerator, SUPPORTED_HOST_LINES, SUPPORTED_SDK_RANGE } from "../compat/host.js";
+import { decisionReport, thresholdsLine } from "../decision/catalog.js";
+import { decisionOptions } from "../options.js";
+import { readState } from "../ledger/store.js";
+import { projectRootOf, type AgentTeamRuntime } from "../runtime.js";
 
 export interface DoctorCheck {
   name: string;
@@ -17,21 +18,6 @@ export interface DoctorReport {
   recommendedAction: string;
   opencodeVersion: string;
   pluginVersion: string;
-}
-
-/**
- * The plugin version is read from the shipped package, not hardcoded, so the
- * doctor can never report a version the plugin is not.
- */
-function pluginVersion(): string {
-  try {
-    const manifest = JSON.parse(
-      fs.readFileSync(path.join(packageRoot(), "package.json"), "utf8"),
-    ) as { version?: string };
-    return manifest.version ?? "unknown";
-  } catch {
-    return "unknown";
-  }
 }
 
 export async function runDoctor(runtime: AgentTeamRuntime): Promise<DoctorReport> {
@@ -63,7 +49,7 @@ export async function runDoctor(runtime: AgentTeamRuntime): Promise<DoctorReport
   });
 
   // 2. Plugin/API version
-  checks.push({ name: "Plugin", status: "PASS", detail: `${pluginVersion()} (SDK ${SUPPORTED_SDK_RANGE})` });
+  checks.push({ name: "Plugin", status: "PASS", detail: `${packageVersion()} (SDK ${SUPPORTED_SDK_RANGE})` });
 
   // 2b. Autonomy policy (informational, always PASS)
   const autonomy = runtime.options.autonomy ?? { mode: "yolo" as const, askBefore: [] as string[] };
@@ -89,6 +75,27 @@ export async function runDoctor(runtime: AgentTeamRuntime): Promise<DoctorReport
       status: "PASS",
       detail: `${catalog.models.length} model(s) available; Agent Team pins none and follows the harness default`,
     });
+  }
+
+  // Decision models. The check is informational: a host without the decision
+  // surface degrades the capability, and the aggregate verdict must not change
+  // for a machine that adopted nothing.
+  try {
+    const root = projectRootOf(runtime.ctx);
+    const surface = resolveDecisionGenerator(runtime.ctx);
+    const state = await readState(root);
+    const judgementRows = state?.evidence.filter((e) => e.kind === "judgment").length ?? 0;
+    const report = await decisionReport(runtime.ctx, root, surface.available, judgementRows);
+    const refs = report.models.map((m) => m.ref);
+    checks.push({
+      name: "Decision models",
+      status: "PASS",
+      detail: report.surface
+        ? `${report.models.length} decision model(s) available${refs.length > 0 ? ` (${refs.join(", ")})` : ""}; ${judgementRows} judgement row(s) recorded`
+        : `the host exposes no decision surface, so the capability is unavailable; ${judgementRows} judgement row(s) recorded`,
+    });
+  } catch (err) {
+    checks.push({ name: "Decision models", status: "PASS", detail: `catalog unreadable: ${(err as Error).message.slice(0, 120)}` });
   }
 
   const efforts = configuredReasoningEfforts(runtime.options);
@@ -123,7 +130,7 @@ export async function runDoctor(runtime: AgentTeamRuntime): Promise<DoctorReport
   try {
     const tools = await runtime.ctx.tool.list();
     const agentTeamTools = tools.filter((t) => t.id.startsWith("agent_team_"));
-    checks.push({ name: "Tool registration", status: agentTeamTools.length >= 8 ? "PASS" : "FAIL", detail: `${agentTeamTools.length}/8 agent_team_* tools` });
+    checks.push({ name: "Tool registration", status: agentTeamTools.length >= 9 ? "PASS" : "FAIL", detail: `${agentTeamTools.length}/9 agent_team_* tools` });
   } catch (err) {
     checks.push({ name: "Tool registration", status: "FAIL", detail: (err as Error).message.slice(0, 200) });
   }
@@ -160,7 +167,7 @@ export async function runDoctor(runtime: AgentTeamRuntime): Promise<DoctorReport
         ? "Ready. Start with /agent-team/start."
         : "Resolve FAIL lines above; Agent Team never substitutes a model on its own — fix the provider, the catalog or your configuration.",
     opencodeVersion,
-    pluginVersion: pluginVersion(),
+    pluginVersion: packageVersion(),
   };
 }
 

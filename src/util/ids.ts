@@ -27,3 +27,14 @@ export function approvalId(n: number): string {
 export function handoffId(n: number): string {
   return `HND-${String(n).padStart(4, "0")}`;
 }
+
+/**
+ * A decision identifier.
+ *
+ * Unguessable on purpose: it names a judgement document on disk, so a
+ * sequence would let one decision overwrite another's audit record. It is
+ * deliberately distinct from the engagement's sequential `DEC-` identifier.
+ */
+export function judgementId(): string {
+  return `JDG-${randomUUID().slice(0, 8).toUpperCase()}`;
+}

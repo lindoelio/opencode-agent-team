@@ -5,6 +5,89 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Calibrated decision models.** Agent Team can now ask a decision model —
+  Jev, Clef, Laya, GPT-6 Luna and the rest of the System One family — a
+  bounded question about a piece of evidence and get back a calibrated
+  probability instead of a paragraph of prose. The plugin discovers whatever
+  decision models the host already exposes, so there is no vendor to
+  configure and no client in `src/`: connect OpenRouter, Cloudflare Workers
+  AI or the Vercel AI Gateway and the models are there. A judgement is a
+  **first pass** — it routes a specialist and escalates when unsure — and it
+  never approves anything. A judgement evidence row satisfies no acceptance
+  criterion, supports no gate claim, and cannot weaken a gate; the existing
+  gates, authority rules and denial rules are untouched.
+- **`agent_team_evaluate_decision`** asks the typed questions (`predicate`,
+  `choice`, `score`), screens the shared state for instructions that would
+  redirect a judgement, redacts it, selects a model deterministically, and
+  records the verdict, the thresholds and the cost.
+- **`/agent-team/decisions`** lists the available decision models, the
+  thresholds in force and the judgement rows recorded. `/agent-team/doctor`
+  now reports the decision surface as an informational line, so a host
+  without it degrades the capability without failing the preflight.
+- **`agent-team-calibrated-decision`** teaches the reviewer, the security
+  specialist and the release specialist when a bounded question is worth
+  asking, and how to report a judgement back to the leader.
+
+### Changed
+
+- **The plugin still makes no network call of its own.** A decision request
+  leaves the machine through the host's own decision surface, exactly as
+  every other model call does. The egress statement in [SECURITY.md](SECURITY.md)
+  is qualified accordingly, and the redaction limitation that already applied
+  to prompts is recorded there too.
+
+### Fixed
+
+- **A secret in the engagement outcome survived in `state.json`.** The initial
+  projection is written by `initializeState`, not through `appendEvent`, so it
+  never went through the redactor — while the event recording the same outcome
+  did. A credential typed into the outcome therefore survived verbatim on disk
+  until the first subsequent write scrubbed it. The initial projection now
+  applies the same redactor as every other write.
+- **`--update` did nothing.** Its condition in the apply path was identical to
+  the unconditional check next to it, so the flag was indistinguishable from
+  `--apply` and the promise it made — refresh what is installed — was never
+  kept. It now refreshes the installed, managed files and leaves the files a
+  newer version introduced uninstalled, in the dry-run plan and in the apply
+  alike.
+- **The setup plan and the setup apply could target different roots.** The
+  plan resolved the global root from `HOME` and the apply from `homedir()`, so
+  with `HOME` unset the dry run described a different directory than the apply
+  wrote to. Both now resolve it the same way.
+- **Setup wrote the wrong plugin version into the consumer's config.** The
+  version was hardcoded as `@0.3.0` while the package was already at `0.4.0`,
+  so `/agent-team/setup` pointed a project at a release two versions behind.
+  The version is now read from the shipped manifest (`packageVersion()`), which
+  is the same source the doctor reports.
+- **`FAILED` and `BLOCKED` were unreachable through a validating host.** The
+  `agent_team_state` tool's declared JSON Schema did not list the `status`
+  property, while its handler and its Zod schema both accepted it — and the
+  schema is closed. A host that validates tool inputs rejected the field, so
+  the status override the 0.4.0 release added could not actually be used. The
+  schema now declares it, and a test pins the declared enum to
+  `WorkStatusSchema`.
+- **The setup command advertised a flag that did not exist.** Its own prompt
+  text promised `--remove`, which no code path implemented. The claim is gone;
+  the prompt text is now the help the user actually gets.
+- **The export command named two different bundles.** The command description
+  said `delivery-readiness` and the message it printed said
+  `release-readiness`. They now agree.
+- **The end-to-end suite asserted a skill that no longer exists.** The
+  designer's test expected `agent-team-design-direction` to be loaded, but that
+  skill was folded into the agent template in 0.4.0 and the designer owns no
+  skill. The assertion could never pass.
+- **The documentation had drifted from the code.** The README described 8 tools,
+  17 skills and 14 commands (the real numbers are 9, 18 and 15), showed a
+  `plugins` configuration shape that OpenCode does not accept, and documented a
+  `--remove` flag that was never implemented. The other guidelines quoted stale
+  coverage figures, stale test-suite counts, a tool count the doctor had moved
+  past, and a rubric weight table that matched no case. All of it is now
+  checked against the code.
+
 ## [0.4.0] - 2026-10-28
 
 ### Added

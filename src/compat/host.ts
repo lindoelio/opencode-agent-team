@@ -86,12 +86,38 @@ export function resolveTextGenerator(ctx: unknown): TextGenerator {
 }
 
 /**
+ * The host's decision surface, resolved by feature detection.
+ *
+ * Only the 2.2.x line exposes it, and the older supported SDK lines do not
+ * declare it at all, so it is read through an `unknown` view and narrowed
+ * here rather than assumed to exist at compile time. A host without it is a
+ * degraded capability, not a failure: the caller decides what to do.
+ */
+export interface DecisionGenerator {
+  decisions(input: unknown): Promise<unknown>;
+}
+
+export interface DecisionSurface {
+  available: boolean;
+  generator?: DecisionGenerator;
+}
+
+export function resolveDecisionGenerator(ctx: unknown): DecisionSurface {
+  const surface = (ctx ?? {}) as {
+    experimental?: { generate?: { decisions?: (input: unknown) => Promise<unknown> } };
+  };
+  const decisions = surface.experimental?.generate?.decisions;
+  if (typeof decisions !== "function") return { available: false };
+  return { available: true, generator: { decisions: (input: unknown) => decisions(input) } };
+}
+
+/**
  * Reports the optional host surfaces that are present. Used by the doctor so
  * an operator sees the real host surface rather than a version number.
  */
 export function describeHostCapabilities(ctx: unknown): string[] {
   const surface = (ctx ?? {}) as {
-    experimental?: { generate?: unknown; terminal?: unknown };
+    experimental?: { generate?: { decisions?: unknown }; terminal?: unknown };
     credential?: unknown;
     permission?: { assert?: unknown };
     session?: { hook?: unknown };
@@ -109,6 +135,10 @@ export function describeHostCapabilities(ctx: unknown): string[] {
     else present.push(label);
   };
   probe("experimental.generate", surface.experimental?.generate);
+  // The decision surface is reported but never required: a host without it
+  // degrades the capability, and a missing required surface would fail the
+  // preflight of a machine that adopted nothing.
+  probe("experimental.generate.decisions", surface.experimental?.generate?.decisions);
   probe("credential", surface.credential);
   probe("permission.assert", surface.permission?.assert);
   probe("session.hook", surface.session?.hook);

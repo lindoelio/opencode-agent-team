@@ -35,3 +35,4 @@ Load the one that matches the artifact under review before starting.
 - `agent-team-research-review` — the artifact is research: sources, method, claims, bias, gaps
 - `agent-team-strategy-review` — the artifact is a decision, plan or thesis: assumptions, trade-offs, reversibility
 - `agent-team-evidence-gate` — you are evaluating a claim of done, readiness or compatibility
+- `agent-team-calibrated-decision` — a bounded question about the artifact decides whether a review pass is worth spending

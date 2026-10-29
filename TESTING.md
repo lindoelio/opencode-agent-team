@@ -47,11 +47,12 @@ Two consequences:
 
 - **`fixtures/**/*.test.ts` is collected.** The fixture projects contain real
   Vitest tests, and they run as part of the suite.
-- **Coverage thresholds are enforced and tight.** The current figures are roughly
-  98.9% statements and 89.5% branches against thresholds of 98/98/98/87. New code
-  without a test fails `npm run test:coverage`, and therefore `npm run verify`.
-  This is deliberate: the integrity rules are the product, and untested branches in
-  them are unverified guarantees.
+- **Coverage thresholds are enforced and tight.** The current figures are
+  ~98.2% statements and lines, 100% functions and ~88.1% branches, against
+  thresholds of 98/98/98/87. New code without a test fails
+  `npm run test:coverage`, and therefore `npm run verify`. This is deliberate:
+  the integrity rules are the product, and untested branches in them are
+  unverified guarantees.
 
 ## Running the tests
 
@@ -88,8 +89,8 @@ or an incoherent case fails the run — so a typo in the rubric cannot pass unno
 
 | Directory | Files | What belongs here |
 |---|---|---|
-| `test/unit/` | 17 | Isolated logic: authority matrix, gate algebra, state machine, redaction, JSONC, host compatibility, schema publication |
-| `test/integration/` | 14 | The main confidence layer: tools against a ledger, hook behaviour, registration contracts, setup, scope enforcement, wave booking |
+| `test/unit/` | 19 | Isolated logic: authority matrix, gate algebra, state machine, redaction, JSONC, host compatibility, schema publication, decision algebra |
+| `test/integration/` | 17 | The main confidence layer: tools against a ledger, hook behaviour, registration contracts, setup, scope enforcement, wave booking, decision surfaces |
 | `test/security/` | 1 | Prompt-injection containment |
 | `test/snapshots/` | 1 | Invariants of the agent templates (not Vitest snapshot files) |
 | `test/e2e/` | 3 | Real CLI, real model, real project |
@@ -113,10 +114,12 @@ These are the guarantees that only a real filesystem and a real ledger can give:
   symlinks, not simulated ones.
 - **Handoff scope.** A write outside the handoff's `allowedScope`, or inside its
   `prohibitedScope`, is refused.
-- **The tool contract.** Every tool input stays closed (`additionalProperties:
-  false`) and in sync with its Zod schema; every registered wrapper is invoked once
-  and must fail with a domain error rather than a `TypeError`, which would mean the
-  tool is wired to nothing.
+- **The tool contract.** Every tool input stays closed
+  (`additionalProperties: false`), and the declared enums are pinned to the
+  canonical domain enums — role, gate, evidence kind, work status — so a
+  literal that drifts in one place fails here; every registered wrapper is
+  invoked once and must fail with a domain error rather than a `TypeError`,
+  which would mean the tool is wired to nothing.
 - **The hooks.** The context hook injects the constitution, the state projection
   and the role contract, and strips the tools a read-only role must not see; the
   prompt hook redacts secrets and quarantines injection; the permission hook
@@ -138,6 +141,13 @@ These are the guarantees that only a real filesystem and a real ledger can give:
   property those tests exist to prove.
 - A test that guards a fix for a specific past failure should say so in its title
   or a comment, so the reason survives the next refactor.
+- **The unit and integration suites never spawn the `opencode` CLI.** A real run
+  creates a real session in the developer's own OpenCode store, and a run pinned
+  to a model that does not exist leaves a failed session behind
+  (`Model unavailable: <provider>/<model>`) that surfaces as an error in the
+  developer's own session list. The CLI belongs to `test/e2e/` and to the model
+  bench, and both are opt-in. A bench rule that needs testing without a real
+  run is extracted into a pure function and tested there.
 - When you change a contract that a test hardcodes — the tool list, the command
   count, the skill count, the published schema files — update the test in the same
   commit. These are deliberate tripwires, not incidental assertions.

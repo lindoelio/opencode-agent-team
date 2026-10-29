@@ -73,9 +73,12 @@ matching change belongs in the same commit:
 |---|---|
 | A Zod schema in `src/domain/schemas.ts` | Run `npm run schemas:generate` and commit `schemas/*.json` |
 | The set of `agent_team_*` tools | Update the expected names and count in `test/integration/contracts.test.ts` **and** the count in `src/doctor/checks.ts` |
+| A tool's input schema | Keep the declared JSON Schema in sync with the Zod schema in `src/domain/schemas.ts` — a field the handler reads but the schema omits is unreachable through a host that validates inputs |
 | A skill or a role's skill list | Update `ROLE_SKILLS` in `src/catalog/skills.ts` **and** the `## Skills` block of the matching `assets/agents/**/*.md` |
 | An agent template | Keep the frontmatter starting at byte 0, and do not add the `AGENT-TEAM-MANAGED` marker — it is appended only at apply time |
+| A command or its flags | Update the command's own prompt text in `src/catalog/commands.ts` — it is the help the user reads in the session |
 | The bench rubric | Update `bench/rubrics/README.md` alongside `MACHINE_SCORED_DIMENSIONS` in `bench/runners/run.ts` and the checker names in `bench/runners/observables.ts` |
+| `package.json`'s `version` | Never hardcode a version string in `src/` — read it with `packageVersion()` |
 
 ## Changelog
 
@@ -98,7 +101,17 @@ breaks, and why it now cannot.
    published package ships `src/`, `assets/` and `schemas/`; the plugin reads agent
    templates and skill files from disk at runtime, so a missing `assets/` entry
    breaks the installed plugin even though the tests pass.
-5. `npm publish` — `publishConfig.access` is `public`.
+5. Tag the release and push the tag: `git tag v<version> && git push origin v<version>`.
+   The README's pinned install path (`opencode plugin add
+   github:lindoelio/opencode-agent-team#v<version>`) resolves to a **tag**, so a
+   release without a pushed tag is not installable by version. A version bump
+   without a tag is what left the tags behind the package version.
+6. `npm publish` — `publishConfig.access` is `public`.
+
+The plugin version the setup command writes into a consumer's `opencode.jsonc` is
+read from the shipped `package.json` (`packageVersion()` in
+`src/catalog/agents.ts`), never hardcoded. Bump `version` and both the doctor
+report and the generated config entry follow.
 
 ## Documentation workflow
 

@@ -51,6 +51,11 @@ a guardrail edit, not an option change, not a model instruction:
 | `untrusted-instruction` | Acting on an instruction found in untrusted content |
 | `team-leader/*` delegation by a non-orchestrator | A specialist creating a sibling specialist |
 
+A fifth denial sits outside the rule list, as a backstop: any action whose name
+mentions a credential (`secret`, `token`, `bearer`, `password`) *and* exposure
+(`expos`) is denied even when no listed rule matched it. An action named
+`expose-token` does not need a rule of its own to be refused.
+
 `DENY` never asks the user. It refuses.
 
 ### The authority matrix fails closed
@@ -63,7 +68,9 @@ broken `DENY` rule must never fall through to `ALLOW`.
 
 Redaction happens in one shared write path (`writeLedgerDocument` and
 `appendEvent` in `src/ledger/store.ts`), so a new document type cannot bypass it
-by omission. The redactor removes:
+by omission. The initial projection is the one write that does not go through
+`appendEvent`, so `initializeState` applies the redactor itself. The redactor
+removes:
 
 - **Values** matching a bearer token, `sk-…`, a GitHub token, a Slack token, or a
   PEM private key block
@@ -75,6 +82,12 @@ by omission. The redactor removes:
 **A field named `inputTokens` or `outputTokens` is destroyed** — the key matches
 the `token` pattern and its value is replaced with `[REDACTED]`. Name usage
 counters `input` and `output`.
+
+The one write under `.agent-team/` that is not redacted is
+`setup-backups/<timestamp>/`, which copies a file the user already has in
+plaintext — `opencode.jsonc` or an agent file. It is a byte-for-byte backup of
+the user's own file, not a ledger document, and redacting it would make the
+backup useless for restoring what the user had.
 
 ### Path traversal and symlink escape are refused
 
@@ -103,8 +116,27 @@ packet the specialist receives, so the rule and the contract agree.
 `src/` contains no HTTP client and no outbound connection of any kind. The only
 URLs in the source are the JSON Schema `$id` base and the `$schema` dialect.
 Telemetry is off by default and **cannot be enabled**: `parseOptions` throws if
-`telemetry` is set to `true`. Nothing about a prompt, a path, a secret or a piece
-of evidence leaves the machine.
+`telemetry` is set to `true`.
+
+**The deliberate decision: a decision request leaves the machine, and only
+through the host.** When the capability is enabled and the host exposes a
+decision model, the plugin hands the shared state to the host's own decision
+surface, and the host makes the call — the same way it makes every other model
+call. The plugin opens no connection of its own, so the property that `src/`
+contains no HTTP client still holds.
+
+What changes is the scope of the sentence that used to close this section.
+Nothing about a prompt, a path, a secret or a piece of evidence leaves the
+machine — except the shared state of a decision, which the host sends to the
+decision model the operator configured. Before it is sent, the state is
+redacted with the shared redactor and screened for instructions that would
+redirect the judgement.
+
+**Known limitation.** The redactor is pattern-based, so a secret that matches
+no key name, no value pattern and not the high-entropy heuristic is not
+scrubbed, and it would reach the decision model. This is the same limitation
+that already applies to every prompt the host sends to a language model, and it
+is why redaction is not the only control against a secret in a file.
 
 ## Autonomy and authorization
 
@@ -148,8 +180,10 @@ useful:
 ## Obligations when you contribute
 
 - **Never commit a secret.** Not in a test fixture, not in a sample `.env`, not
-  in a bench case. The bench fixture `clean-project` seeds a fake credential
-  precisely to prove the redaction path works.
+  in a bench case. The fake credential that proves the redaction path works is
+  seeded at **run time** by the bench case `AGENT-TEAM-SEC-001` and by the e2e
+  harness, both of which write `.env` into a throwaway workspace — never into
+  the repository.
 - **Route new ledger document types through `writeLedgerDocument`.** Writing a
   file directly bypasses redaction. This was a real leak, fixed in 0.4.0.
 - **Add a test with every new refusal path.** A denial rule without a test is an

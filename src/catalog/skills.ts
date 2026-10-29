@@ -25,6 +25,7 @@ export const SKILL_IDS = [
   "agent-team-safe-autonomy",
   "agent-team-evidence-gate",
   "agent-team-delivery-contract",
+  "agent-team-calibrated-decision",
 ] as const;
 
 export type SkillId = (typeof SKILL_IDS)[number];
@@ -44,6 +45,7 @@ export const ROLE_SKILLS: Record<string, readonly SkillId[]> = {
     "agent-team-evidence-gate",
     "agent-team-safe-autonomy",
     "agent-team-delivery-contract",
+    "agent-team-calibrated-decision",
   ],
   "team-leader/explorer": ["agent-team-domain-discovery", "agent-team-structured-investigation"],
   "team-leader/product": ["agent-team-intent-framing"],
@@ -63,9 +65,10 @@ export const ROLE_SKILLS: Record<string, readonly SkillId[]> = {
     "agent-team-research-review",
     "agent-team-strategy-review",
     "agent-team-evidence-gate",
+    "agent-team-calibrated-decision",
   ],
-  "team-leader/security": ["agent-team-safe-autonomy", "agent-team-evidence-gate"],
-  "team-leader/release": ["agent-team-delivery-contract"],
+  "team-leader/security": ["agent-team-safe-autonomy", "agent-team-evidence-gate", "agent-team-calibrated-decision"],
+  "team-leader/release": ["agent-team-delivery-contract", "agent-team-calibrated-decision"],
 };
 
 /** Skill ids a role may load. Unknown roles get nothing: no guessing. */

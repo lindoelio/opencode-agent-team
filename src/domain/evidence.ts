@@ -10,6 +10,11 @@ const SUPPORTS: Record<EvidenceRef["kind"], string[]> = {
   release: ["release candidate passed defined checks"],
   document: ["artifact exists", "document produced"],
   metric: ["number moved", "metric measured"],
+  /**
+   * A judgement supports no canonical claim. Its acceptance comes from the
+   * operator policy alone, and it never satisfies a criterion.
+   */
+  judgment: [],
 };
 
 const FORBIDDEN: Array<{ evidence: EvidenceRef["kind"]; claim: RegExp; reason: string }> = [
@@ -45,5 +50,8 @@ export function claimSupported(kind: EvidenceRef["kind"], claim: string): { ok: 
 
 export function evidenceSatisfiesCriterion(e: EvidenceRef): boolean {
   if (e.status !== "pass") return false;
+  // A judgement is a record, not a proof. Excluding it here is what keeps it
+  // from satisfying a criterion through the generic path.
+  if (e.kind === "judgment") return false;
   return Boolean(e.artifactRef || e.command || e.digest);
 }

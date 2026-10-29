@@ -47,8 +47,8 @@ e2e suite is an environment condition, not a bug to fix.
 ## Agent Constraints
 
 **Coverage gates are tight and enforced.** `vitest.config.ts` fails `test:coverage` below
-98% statements/lines/functions and 87% branches (currently ~98.9 / ~89.5). New code without
-a test breaks `npm run verify`. See [TESTING.md](TESTING.md).
+98% statements/lines/functions and 87% branches (currently ~98.2 statements, ~88.1 branches).
+New code without a test breaks `npm run verify`. See [TESTING.md](TESTING.md).
 
 **`tsx` is not a dependency.** `npm run schemas:generate`, `npm run compat:check` and the
 `npm run bench` fallback all shell out to `npx tsx`, which downloads on first use — they need
@@ -63,7 +63,9 @@ reaches disk. Name usage counters `input` / `output`. See [SECURITY.md](SECURITY
 
 **Every ledger document write goes through `writeLedgerDocument` in `src/ledger/store.ts`.**
 That is where redaction happens. Writing a new document type any other way bypasses
-redaction — that was a real leak fixed in 0.4.0.
+redaction — that was a real leak fixed in 0.4.0. The one exception is
+`.agent-team/setup-backups/`, which copies a file the user already has in plaintext; it is a
+backup, not a ledger document, and it is deliberately byte-for-byte.
 
 **Host APIs must compile on three SDK lines.** `npm run compat:check` builds and tests against
 `@opencode/plugin` 2.0.10, 2.1.4 and 2.2.0. Surfaces absent from the older typings (e.g.
@@ -71,9 +73,22 @@ redaction — that was a real leak fixed in 0.4.0.
 detection, like `resolveTextGenerator` in `src/compat/host.ts`. Never assume a host surface
 exists at compile time.
 
-**`src/doctor/checks.ts` hardcodes the tool count** (`${n}/8 agent_team_* tools`), and
+**Never spawn the `opencode` CLI from a unit or integration test.** A real run creates a
+real session in the developer's own OpenCode store; a run against a model that does not
+exist leaves a failed session behind (`Model unavailable: <provider>/<model>`) and shows up
+as an error in the developer's own session list. The CLI belongs to `test/e2e/` and to the
+model bench, both opt-in. Extract the rule under test into a pure function instead.
+
+**`src/doctor/checks.ts` hardcodes the tool count** (`${n}/9 agent_team_* tools`), and
 `test/integration/contracts.test.ts` hardcodes the tool names, the command count and the
-skill count. Adding or renaming any of them means updating both in the same commit.
+skill count. Adding or renaming any of them means updating both in the same commit. The
+same test pins the declared enums of the state, handoff, gate and evidence tools to the
+canonical domain enums — a tool's JSON Schema that omits a field its handler reads makes
+that field unreachable through a host that validates inputs.
+
+**Never hardcode the plugin version.** `packageVersion()` in `src/catalog/agents.ts` reads
+the shipped `package.json`. A hardcoded version drifts on every release, and a stale one
+writes the wrong plugin spec into a consumer's `opencode.jsonc`.
 
 **Agent templates and the runtime skill map must agree.** `ROLE_SKILLS` in
 `src/catalog/skills.ts` is compared against the `## Skills` block of each
@@ -86,8 +101,9 @@ means editing both. Templates must start with `---\n` at byte 0 and must **not**
 need `import type`. Declare functions with `export function`, not `export const fn = () => {}`.
 Details: [STYLEGUIDE.md](STYLEGUIDE.md).
 
-**A tool is one file in `src/tools/`**: a frozen `XXX_TOOL` const with a closed input schema
-plus an `executeXxx(runtime, rawInput, tool)` function, registered in `src/tools/index.ts`.
+**A tool is one file in `src/tools/`**: an `XXX_TOOL` const frozen with `as const` (a
+compile-time type assertion, not `Object.freeze`) with a closed input schema, plus an
+`executeXxx(runtime, rawInput, tool)` function, registered in `src/tools/index.ts`.
 Ledger writes go through `appendEvent(...)` via `openLedger(...)`, which enforces
 `expectedRevision` and refuses a writer who is not `team-leader`. Details:
 [ARCHITECTURE.md](ARCHITECTURE.md).

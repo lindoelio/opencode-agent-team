@@ -65,6 +65,23 @@ describe("ledger store", () => {
     expect(raw).not.toContain("abcdefghijklmnop");
   });
 
+  it("redacts the initial projection, which is written outside appendEvent", async () => {
+    // The engagement outcome is free text the leader composes. If it carries a
+    // credential, the initial state.json must not keep it — and it must agree
+    // with the event that records the same outcome.
+    const root = await tmpRoot();
+    await initializeState({
+      projectRoot: root,
+      sessionId: "s1",
+      actor: "agent-team",
+      outcome: "rotate the Bearer abcdefghijklmnopqrstuvwx credential",
+    });
+    const state = await fs.promises.readFile(path.join(root, ".agent-team", "state.json"), "utf8");
+    expect(state).not.toContain("abcdefghijklmnopqrstuvwx");
+    const events = await fs.promises.readFile(path.join(root, ".agent-team", "ledger", "events.jsonl"), "utf8");
+    expect(events).not.toContain("abcdefghijklmnopqrstuvwx");
+  });
+
   it("returns empty events on fresh roots and writes delivery docs", async () => {
     const root = await tmpRoot();
     expect(await readEvents(root)).toEqual([]);
