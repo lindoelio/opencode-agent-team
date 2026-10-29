@@ -12,8 +12,8 @@ export function decisionId(n: number): string {
   return `DEC-${String(n).padStart(4, "0")}`;
 }
 
-export function sliceId(n: number): string {
-  return `SLICE-${String(n).padStart(3, "0")}`;
+export function deliveryId(n: number): string {
+  return `DEL-${String(n).padStart(3, "0")}`;
 }
 
 export function evidenceId(n: number): string {

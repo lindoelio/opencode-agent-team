@@ -1,41 +1,30 @@
-import { LINDO_COMMANDS, parseCommandArgs } from "./commands.js";
-import { MODEL_PROFILE } from "./model-profile.js";
+import { AGENT_TEAM_COMMANDS, parseCommandArgs } from "./commands.js";
 import { applySetupPlan } from "../bootstrap/apply.js";
 import { buildSetupPlan, renderPlanText } from "../bootstrap/plan.js";
-import { isProviderModelRef } from "../bootstrap/jsonc.js";
 import { runDoctor, renderDoctorReport } from "../doctor/checks.js";
 import { appendEvent, readState, storeContext } from "../ledger/store.js";
 import { project } from "../ledger/projection.js";
-import { projectRootOf, type LindoRuntime } from "../runtime.js";
+import { projectRootOf, type AgentTeamRuntime } from "../runtime.js";
 
-const PLUGIN_PACKAGE = "@lindoelio/opencode-lindo@0.2.0";
+const PLUGIN_PACKAGE = "@lindoelio/opencode-agent-team@0.3.0";
 
-async function sendSessionText(runtime: LindoRuntime, sessionID: string, text: string): Promise<void> {
+async function sendSessionText(runtime: AgentTeamRuntime, sessionID: string, text: string): Promise<void> {
   await runtime.ctx.session.synthetic({ sessionID, text } as never);
 }
 
-export async function registerCommands(runtime: LindoRuntime): Promise<{ dispose: () => Promise<void> }> {
+export async function registerCommands(runtime: AgentTeamRuntime): Promise<{ dispose: () => Promise<void> }> {
   const registration = await runtime.ctx.command.transform((editor: any) => {
-    for (const cmd of LINDO_COMMANDS) {
+    for (const cmd of AGENT_TEAM_COMMANDS) {
       editor.add({
         name: cmd.name,
         description: cmd.description,
         execute: async ({ sessionID, prompt }: any) => {
           const args = String((prompt as unknown as { text?: string }).text ?? "");
           // Lifecycle commands execute locally for determinism.
-          if (cmd.name === "lindo/setup") {
-            const parsed = parseCommandArgs(stripCommandPrefix(args, "lindo/setup"));
+          if (cmd.name === "agent-team/setup") {
+            const parsed = parseCommandArgs(stripCommandPrefix(args, "agent-team/setup"));
             const scope = parsed.get("scope") === "global" ? "global" : "project";
             const setDefault = parsed.flags.has("set-default") || (!parsed.flags.has("no-default") && scope === "project" && parsed.flags.has("apply"));
-            const remapTo = parsed.get("remap-model");
-            let modelRemap: { from: string; to: string } | undefined;
-            if (remapTo !== undefined) {
-              if (!isProviderModelRef(remapTo)) {
-                await sendSessionText(runtime, sessionID, `Invalid --remap-model '${remapTo}': expected provider/model (no variant). Nothing was written.`);
-                return;
-              }
-              modelRemap = { from: `${MODEL_PROFILE.providerID}/${MODEL_PROFILE.modelID}`, to: remapTo };
-            }
             const plan = await buildSetupPlan({
               scope,
               setDefault: parsed.flags.has("set-default"),
@@ -46,11 +35,9 @@ export async function registerCommands(runtime: LindoRuntime): Promise<{ dispose
                 profile: runtime.options.profile,
                 strictEvidence: runtime.options.strictEvidence,
                 projectState: runtime.options.projectState,
-                model: runtime.options.model,
                 telemetry: false,
               },
               includePluginOptions: true,
-              modelRemap,
             });
             if (parsed.flags.has("apply")) {
               const result = await applySetupPlan({
@@ -63,24 +50,22 @@ export async function registerCommands(runtime: LindoRuntime): Promise<{ dispose
                   profile: runtime.options.profile,
                   strictEvidence: runtime.options.strictEvidence,
                   projectState: runtime.options.projectState,
-                  model: runtime.options.model,
                   telemetry: false,
                 },
                 includePluginOptions: true,
-                modelRemap,
               });
-              await sendSessionText(runtime, sessionID, `Lindo setup applied.\nCreated: ${result.created.join(", ") || "(none)"}\nUpdated: ${result.updated.join(", ") || "(none)"}\nSkipped (user content): ${result.skipped.join(", ") || "(none)"}\nBackups: ${result.backups.length}\nConfig changed: ${result.configChanged}\n\nReload OpenCode and run /lindo/doctor.`);
+              await sendSessionText(runtime, sessionID, `Agent Team setup applied.\nCreated: ${result.created.join(", ") || "(none)"}\nUpdated: ${result.updated.join(", ") || "(none)"}\nRemoved (previous roster): ${result.removed.join(", ") || "(none)"}\nSkipped (user content): ${result.skipped.join(", ") || "(none)"}\nBackups: ${result.backups.length}\nConfig changed: ${result.configChanged}\n\nReload OpenCode and run /agent-team/doctor.`);
               return;
             }
             await sendSessionText(runtime, sessionID, `${renderPlanText(plan)}\n\nDry run only. Re-run with --apply to write.`);
             return;
           }
-          if (cmd.name === "lindo/guard") {
-            const parsed = parseCommandArgs(stripCommandPrefix(args, "lindo/guard"));
+          if (cmd.name === "agent-team/guard") {
+            const parsed = parseCommandArgs(stripCommandPrefix(args, "agent-team/guard"));
             const root = projectRootOf(runtime.ctx);
             const state = await readState(root);
             if (!state) {
-              await sendSessionText(runtime, sessionID, "Verdict: no engagement yet.\n\nNext: run /lindo/start <outcome>, then /lindo/guard to tune authorization.");
+              await sendSessionText(runtime, sessionID, "Verdict: no engagement yet.\n\nNext: run /agent-team/start <outcome>, then /agent-team/guard to tune authorization.");
               return;
             }
             const add = parsed.get("add");
@@ -100,7 +85,7 @@ export async function registerCommands(runtime: LindoRuntime): Promise<{ dispose
                 `Autonomy: ${effective}${effective === "yolo" ? " (asks nothing by default)" : " (legacy ask-before-external behavior)"}`,
                 `Guardrails: ${all.length > 0 ? all.map((g) => `"${g}"`).join(", ") : "(none)"}`,
                 "",
-                `Usage: /lindo/guard --add "<pattern>" | --remove "<pattern>" | --clear | --mode yolo|guarded`,
+                `Usage: /agent-team/guard --add "<pattern>" | --remove "<pattern>" | --clear | --mode yolo|guarded`,
                 `Patterns match "<action> <resources>" case-insensitively (plain text or regex).`,
               ].join("\n"));
               return;
@@ -116,19 +101,19 @@ export async function registerCommands(runtime: LindoRuntime): Promise<{ dispose
             await sendSessionText(runtime, sessionID, [
               `Autonomy: ${effective}`,
               `Guardrails: ${next.guardrails.length > 0 ? next.guardrails.map((g) => `"${g}"`).join(", ") : "(none)"}`,
-              effective === "yolo" && next.guardrails.length === 0 ? "Lindo asks nothing and executes autonomously." : "Matching actions now require explicit authorization.",
+              effective === "yolo" && next.guardrails.length === 0 ? "Agent Team asks nothing and executes autonomously." : "Matching actions now require explicit authorization.",
             ].join("\n"));
             return;
           }
-          if (cmd.name === "lindo/doctor") {
+          if (cmd.name === "agent-team/doctor") {
             const report = await runDoctor(runtime);
             await sendSessionText(runtime, sessionID, renderDoctorReport(report));
             return;
           }
-          if (cmd.name === "lindo/status") {
+          if (cmd.name === "agent-team/status") {
             const state = await readState(projectRootOf(runtime.ctx));
             if (!state) {
-              await sendSessionText(runtime, sessionID, "Verdict: no engagement yet.\n\nNext: run /lindo/start <outcome>.");
+              await sendSessionText(runtime, sessionID, "Verdict: no engagement yet.\n\nNext: run /agent-team/start <outcome>.");
               return;
             }
             const p = project(state);
@@ -137,11 +122,11 @@ export async function registerCommands(runtime: LindoRuntime): Promise<{ dispose
             await sendSessionText(runtime, sessionID, `Verdict: ${state.engagement.phase} / ${state.engagement.status} — ${p.next_action}\n\nPhase: ${p.phase}\nGate: ${JSON.stringify(p.gate_status)}\nEvidence: ${state.evidence.length} records\nRisks: ${p.critical_risks.length} critical/high\nAutonomy: ${autonomy} (${guards.length} guardrails)`);
             return;
           }
-          if (cmd.name === "lindo/export") {
-            await sendSessionText(runtime, sessionID, "Lindo export: choose bundle (status | decision-log | evidence | release-readiness | retrospective). Files/fields preview + redaction applied before writing to .lindo/exports/. Re-run with the bundle name as argument to generate.");
+          if (cmd.name === "agent-team/export") {
+            await sendSessionText(runtime, sessionID, "Agent Team export: choose bundle (status | decision-log | evidence | release-readiness | retrospective). Files/fields preview + redaction applied before writing to .agent-team/exports/. Re-run with the bundle name as argument to generate.");
             return;
           }
-          // Loop commands: structured prompt to lindo in the current session.
+          // Loop commands: structured prompt to agent-team in the current session.
           const body = cmd.prompt(stripCommandPrefix(args, cmd.name));
           await runtime.ctx.session.prompt({ sessionID, text: body } as never);
         },

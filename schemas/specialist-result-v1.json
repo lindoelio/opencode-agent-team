@@ -1,28 +1,79 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/lindoelio/opencode-lindo/schemas/specialist-result-v1.json",
+  "$id": "https://github.com/lindoelio/opencode-agent-team/schemas/specialist-result-v1.json",
   "title": "SpecialistResultV1",
   "type": "object",
-  "additionalProperties": false,
-  "required": ["status", "summary", "findings", "risks", "unknowns", "recommended_next_action"],
   "properties": {
-    "status": { "enum": ["PASS", "FAIL", "BLOCKED", "ADVISORY"] },
-    "summary": { "type": "string" },
+    "status": {
+      "type": "string",
+      "enum": [
+        "PASS",
+        "FAIL",
+        "BLOCKED",
+        "ADVISORY"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
     "findings": {
       "type": "array",
       "items": {
         "type": "object",
-        "additionalProperties": false,
-        "required": ["severity", "claim", "evidence"],
         "properties": {
-          "severity": { "enum": ["critical", "high", "medium", "low", "note"] },
-          "claim": { "type": "string" },
-          "evidence": { "type": "array", "items": { "type": "string" } }
-        }
+          "severity": {
+            "type": "string",
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low",
+              "note"
+            ]
+          },
+          "claim": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "severity",
+          "claim",
+          "evidence"
+        ],
+        "additionalProperties": false
       }
     },
-    "risks": { "type": "array", "items": { "type": "string" } },
-    "unknowns": { "type": "array", "items": { "type": "string" } },
-    "recommended_next_action": { "type": "string" }
-  }
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "unknowns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "recommended_next_action": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "status",
+    "summary",
+    "findings",
+    "risks",
+    "unknowns",
+    "recommended_next_action"
+  ],
+  "additionalProperties": false
 }

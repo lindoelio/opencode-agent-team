@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { loadTemplates } from "../catalog/agents.js";
-import { isManaged, mergeProjectConfig, planManagedFiles, readModelRemap, applyModelRemapToTemplates, type ModelRemap, type SetupPlan } from "./jsonc.js";
+import { isManaged, mergeProjectConfig, planManagedFiles, planStaleManagedFiles, type SetupPlan } from "./jsonc.js";
+import { LEGACY_MANAGED_AGENT_FILES } from "./managed-files.js";
 
 export interface SetupOptions {
   scope: "project" | "global";
@@ -12,13 +13,6 @@ export interface SetupOptions {
   pluginOptions: Record<string, unknown>;
   includePluginOptions: boolean;
   homeDir?: string;
-  /** Explicit model remediation (from setup --remap-model); persisted to .lindo/setup.json on apply. */
-  modelRemap?: ModelRemap;
-}
-
-export async function resolveEffectiveRemap(root: string, explicit?: ModelRemap): Promise<ModelRemap | null> {
-  if (explicit) return explicit;
-  return readModelRemap(root);
 }
 
 export function targetRoot(opts: SetupOptions): string {
@@ -30,12 +24,9 @@ export async function buildSetupPlan(opts: SetupOptions): Promise<SetupPlan & { 
   const root = targetRoot(opts);
   const templates = await loadTemplates();
   const warnings: string[] = [];
-  const modelRemap = await resolveEffectiveRemap(root, opts.modelRemap);
-  const effective = modelRemap ? applyModelRemapToTemplates(templates, modelRemap) : templates;
-  if (modelRemap) warnings.push(`model remap active: ${modelRemap.from} -> ${modelRemap.to} (explicit choice recorded in .lindo/setup.json)`);
   // Remap agent targets for global scope.
   const remapped = new Map<string, string>();
-  for (const [rel, content] of effective) {
+  for (const [rel, content] of templates) {
     if (opts.scope === "global" && rel.startsWith(".opencode/agents/")) {
       warnings.push(`global scope remaps ${rel} under the global config dir`);
       remapped.set(rel, content);
@@ -44,6 +35,13 @@ export async function buildSetupPlan(opts: SetupOptions): Promise<SetupPlan & { 
     }
   }
   const files = await planManagedFiles(root, remapped, "1");
+  // Roster files from an earlier version of the plugin are removed so the
+  // project never keeps two rosters side by side.
+  const stale = await planStaleManagedFiles(root, LEGACY_MANAGED_AGENT_FILES);
+  files.push(...stale);
+  if (stale.some((f) => f.action === "remove-managed")) {
+    warnings.push("previous-version agent files will be removed on apply (backed up first)");
+  }
   let configDiff: string | undefined;
   try {
     const merged = await mergeProjectConfig({
@@ -62,7 +60,7 @@ export async function buildSetupPlan(opts: SetupOptions): Promise<SetupPlan & { 
 }
 
 export function renderPlanText(plan: SetupPlan & { root: string }): string {
-  const lines = [`Lindo setup plan — root: ${plan.root}`, ""];
+  const lines = [`Agent Team setup plan — root: ${plan.root}`, ""];
   for (const f of plan.files) lines.push(`- ${f.action} ${f.path} (${f.reason})`);
   if (plan.configDiff) lines.push("", plan.configDiff);
   if (plan.warnings.length > 0) lines.push("", ...plan.warnings.map((w) => `warning: ${w}`));

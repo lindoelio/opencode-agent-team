@@ -5,12 +5,12 @@ export const PhaseSchema = z.enum([
   "DISCOVER",
   "FRAME",
   "DECIDE",
-  "SLICE",
-  "IMPLEMENT",
+  "PLAN",
+  "EXECUTE",
   "VERIFY",
   "REVIEW",
   "ACCEPT",
-  "RELEASE",
+  "DELIVER",
 ]);
 export type Phase = z.infer<typeof PhaseSchema>;
 
@@ -21,8 +21,8 @@ export const WorkStatusSchema = z.enum([
   "VERIFYING",
   "REVIEWING",
   "ACCEPTED",
-  "RELEASE_READY",
-  "RELEASED",
+  "DELIVERY_READY",
+  "DELIVERED",
   "FAILED",
   "BLOCKED",
   "CANCELLED",
@@ -34,6 +34,19 @@ export type EpistemicBasis = z.infer<typeof EpistemicBasisSchema>;
 
 export const AuthorityLevelSchema = z.enum(["ALLOW", "ALLOW_WITH_RECORD", "ASK", "DENY"]);
 export type AuthorityLevel = z.infer<typeof AuthorityLevelSchema>;
+
+export const SpecialistRoleSchema = z.enum([
+  "explorer",
+  "product",
+  "architect",
+  "designer",
+  "coder",
+  "worker",
+  "reviewer",
+  "security",
+  "release",
+]);
+export type SpecialistRole = z.infer<typeof SpecialistRoleSchema>;
 
 export const AssumptionRefSchema = z.object({
   id: z.string(),
@@ -55,7 +68,7 @@ export const DecisionOptionSchema = z.object({
 export type DecisionOption = z.infer<typeof DecisionOptionSchema>;
 
 export const DecisionRefSchema = z.object({
-  id: z.string(),
+  id: z.string().min(1),
   title: z.string().min(1),
   context: z.string(),
   drivers: z.array(z.string()),
@@ -70,26 +83,39 @@ export const DecisionRefSchema = z.object({
 });
 export type DecisionRef = z.infer<typeof DecisionRefSchema>;
 
-export const SliceRefSchema = z.object({
-  id: z.string(),
+/** How a delivery is proven. `functional` = the flow works, `presentation` = how it looks, `document` = an artifact exists, `metric` = a number moved. */
+export const ProofKindSchema = z.enum(["functional", "presentation", "document", "metric"]);
+export type ProofKind = z.infer<typeof ProofKindSchema>;
+
+export const ProofSchema = z.object({
+  kind: ProofKindSchema,
+  claim: z.string().min(1),
+  ref: z.string().min(1),
+});
+export type Proof = z.infer<typeof ProofSchema>;
+
+export const DeliveryRefSchema = z.object({
+  id: z.string().min(1),
   title: z.string().min(1),
   userOutcome: z.string().min(1),
   entryState: z.string(),
   happyPath: z.array(z.string()),
   inScope: z.array(z.string()),
   outOfScope: z.array(z.string()),
-  allowedFiles: z.array(z.string()),
-  prohibitedFiles: z.array(z.string()),
+  /** What this delivery may touch: files, channels, pages, processes, accounts. */
+  allowedScope: z.array(z.string()),
+  /** What it must never touch. */
+  prohibitedScope: z.array(z.string()),
   acceptanceCriteria: z.array(z.string()).min(1),
-  validationCommands: z.array(z.string()),
-  runtimeProof: z.array(z.string()),
-  visualProof: z.array(z.string()),
+  /** How the delivery is checked: commands, checks, calls, human sign-offs. */
+  validationSteps: z.array(z.string()),
+  proof: z.array(ProofSchema),
   risks: z.array(z.string()),
   rollback: z.string(),
   owner: z.string(),
   status: z.string(),
 });
-export type SliceRef = z.infer<typeof SliceRefSchema>;
+export type DeliveryRef = z.infer<typeof DeliveryRefSchema>;
 
 export const RiskRefSchema = z.object({
   id: z.string(),
@@ -100,7 +126,7 @@ export const RiskRefSchema = z.object({
 export type RiskRef = z.infer<typeof RiskRefSchema>;
 
 export const GateRefSchema = z.object({
-  gate: z.enum(["INTENT", "DISCOVERY", "SLICE", "VERIFY", "REVIEW", "ACCEPT", "RELEASE"]),
+  gate: z.enum(["INTENT", "DISCOVERY", "PLAN", "VERIFY", "REVIEW", "ACCEPT", "DELIVER"]),
   result: z.enum(["PASS", "FAIL", "BLOCKED"]),
   claim: z.string(),
   satisfied: z.array(z.string()),
@@ -109,13 +135,19 @@ export const GateRefSchema = z.object({
   waivers: z.array(z.string()),
   nextAction: z.string(),
   evaluatedAt: z.string(),
+  /**
+   * A digest of the delivery contract this gate was evaluated against. The
+   * DELIVER gate compares it with the contract as it stands now, so a
+   * delivery cannot be quietly changed after it was accepted.
+   */
+  contractDigest: z.string().optional(),
 });
 export type GateRef = z.infer<typeof GateRefSchema>;
 
 export const EvidenceRefSchema = z.object({
   id: z.string(),
   criterionId: z.string().min(1),
-  kind: z.enum(["test", "runtime", "visual", "source", "review", "release"]),
+  kind: z.enum(["test", "runtime", "visual", "source", "review", "release", "document", "metric"]),
   status: z.enum(["pass", "fail", "partial", "skipped"]),
   summary: z.string().min(1),
   artifactRef: z.string().optional(),
@@ -143,7 +175,7 @@ export type ApprovalRef = z.infer<typeof ApprovalRefSchema>;
 
 export const HandoffRefSchema = z.object({
   id: z.string(),
-  role: z.enum(["explorer", "product", "architect", "designer", "builder", "verifier", "security", "release"]),
+  role: SpecialistRoleSchema,
   objective: z.string().min(1),
   context: z.array(z.string()),
   allowedScope: z.array(z.string()),
@@ -151,29 +183,35 @@ export const HandoffRefSchema = z.object({
   questions: z.array(z.string()),
   requiredEvidence: z.array(z.string()),
   stopCondition: z.string(),
+  /** Skills the specialist must load before acting. */
+  skills: z.array(z.string()).default([]),
+  /** Handoff ids that must complete before this one can start. */
+  dependsOn: z.array(z.string()).default([]),
   status: z.enum(["prepared", "completed", "cancelled"]),
   result: z.unknown().optional(),
 });
 export type HandoffRef = z.infer<typeof HandoffRefSchema>;
 
-export const SpecialistResultSchema = z.object({
-  status: z.enum(["PASS", "FAIL", "BLOCKED", "ADVISORY"]),
-  summary: z.string().min(1),
-  findings: z.array(
-    z.object({
-      severity: z.enum(["critical", "high", "medium", "low", "note"]),
-      claim: z.string(),
-      evidence: z.array(z.string()),
-    }),
-  ),
-  risks: z.array(z.string()),
-  unknowns: z.array(z.string()),
-  recommended_next_action: z.string(),
-});
+export const SpecialistResultSchema = z
+  .object({
+    status: z.enum(["PASS", "FAIL", "BLOCKED", "ADVISORY"]),
+    summary: z.string().min(1),
+    findings: z.array(
+      z.object({
+        severity: z.enum(["critical", "high", "medium", "low", "note"]),
+        claim: z.string(),
+        evidence: z.array(z.string()),
+      }),
+    ),
+    risks: z.array(z.string()),
+    unknowns: z.array(z.string()),
+    recommended_next_action: z.string().min(1),
+  })
+  .strict();
 export type SpecialistResult = z.infer<typeof SpecialistResultSchema>;
 
-export const LindoProjectStateSchema = z.object({
-  schemaVersion: z.literal(1),
+export const AgentTeamProjectStateSchema = z.object({
+  schemaVersion: z.literal(2),
   revision: z.number().int().min(0),
   project: z.object({
     id: z.string().min(1),
@@ -207,7 +245,7 @@ export const LindoProjectStateSchema = z.object({
   autonomyMode: z.enum(["yolo", "guarded"]).optional(),
   assumptions: z.array(AssumptionRefSchema),
   decisions: z.array(DecisionRefSchema),
-  activeSlice: SliceRefSchema.optional(),
+  activeDelivery: DeliveryRefSchema.optional(),
   risks: z.array(RiskRefSchema),
   gates: z.array(GateRefSchema),
   evidence: z.array(EvidenceRefSchema),
@@ -218,17 +256,14 @@ export const LindoProjectStateSchema = z.object({
     owner: z.string(),
     blockedBy: z.array(z.string()).optional(),
   }),
-  modelProfile: z.object({
-    providerID: z.string(),
-    modelID: z.string(),
-    defaultVariant: z.string(),
-    verifiedAt: z.string().optional(),
-    status: z.enum(["READY", "DEGRADED", "UNAVAILABLE"]),
-  }),
 });
-export type LindoProjectStateV1 = z.infer<typeof LindoProjectStateSchema>;
+export type AgentTeamProjectStateV2 = z.infer<typeof AgentTeamProjectStateSchema>;
 
-export const LindoEventSchema = z.object({
+/**
+ * Event envelope format. Unchanged by the v2 state migration: the hash chain
+ * covers these bytes, so the envelope keeps its own version.
+ */
+export const AgentTeamEventSchema = z.object({
   schemaVersion: z.literal(1),
   id: z.string(),
   sequence: z.number().int().min(0),
@@ -242,7 +277,7 @@ export const LindoEventSchema = z.object({
   previousHash: z.string(),
   hash: z.string(),
 });
-export type LindoEventV1 = z.infer<typeof LindoEventSchema>;
+export type AgentTeamEventV1 = z.infer<typeof AgentTeamEventSchema>;
 
 // ---- Tool input schemas (closed) ----
 
@@ -264,6 +299,12 @@ export const StateTransitionInput = z
     to: PhaseSchema,
     reason: z.string().min(1),
     nextAction: z.string().min(1),
+    /**
+     * Explicit work status. The status normally follows the phase, but a
+     * leader must be able to mark an engagement FAILED or BLOCKED without
+     * inventing a phase that means it.
+     */
+    status: WorkStatusSchema.optional(),
   })
   .strict();
 export const StateGuardInput = z
@@ -276,7 +317,7 @@ export const StateGuardInput = z
     clear: z.boolean().optional(),
   })
   .strict();
-export const LindoStateInputSchema = z.union([StateReadInput, StateInitInput, StateTransitionInput, StateGuardInput]);
+export const AgentTeamStateInputSchema = z.union([StateReadInput, StateInitInput, StateTransitionInput, StateGuardInput]);
 
 export const RecordAssumptionInputSchema = z
   .object({
@@ -302,15 +343,38 @@ export const RecordDecisionInputSchema = z
     consequences: z.array(z.string()),
     reversibility: z.enum(["easy", "moderate", "hard", "irreversible"]),
     authority: z.enum(["ALLOW", "ALLOW_WITH_RECORD", "ASK"]),
-    evidenceRefs: z.array(z.string()).optional(),
+    /** Ids of the assumptions or evidence records this decision rests on. At least one must exist. */
+    evidenceRefs: z.array(z.string()).min(1),
   })
   .strict();
 
-export const SubmitEvidenceInputSchema = z
+export const DefineDeliveryInputSchema = z
   .object({
     expectedRevision: z.number().int().min(0),
+    title: z.string().min(1),
+    userOutcome: z.string().min(1),
+    entryState: z.string().optional(),
+    /** The one thin end-to-end flow this delivery proves. Required: a delivery without a path is not a delivery. */
+    happyPath: z.array(z.string()).min(1),
+    inScope: z.array(z.string()).optional(),
+    outOfScope: z.array(z.string()).optional(),
+    /** What the delivery may touch. Required: scope without a boundary is unbounded work. */
+    allowedScope: z.array(z.string()).min(1),
+    prohibitedScope: z.array(z.string()).optional(),
+    acceptanceCriteria: z.array(z.string()).min(1),
+    validationSteps: z.array(z.string()).min(1),
+    proof: z.array(ProofSchema).optional(),
+    risks: z.array(z.string()).optional(),
+    rollback: z.string().min(1),
+    owner: z.string().optional(),
+    status: z.string().optional(),
+  })
+  .strict();
+
+export const SubmitEvidenceInputSchema = z  .object({
+    expectedRevision: z.number().int().min(0),
     criterionId: z.string().min(1),
-    kind: z.enum(["test", "runtime", "visual", "source", "review", "release"]),
+    kind: z.enum(["test", "runtime", "visual", "source", "review", "release", "document", "metric"]),
     status: z.enum(["pass", "fail", "partial", "skipped"]),
     summary: z.string().min(1),
     artifactRef: z.string().optional(),
@@ -323,7 +387,7 @@ export const SubmitEvidenceInputSchema = z
 
 export const EvaluateGateInputSchema = z
   .object({
-    gate: z.enum(["INTENT", "DISCOVERY", "SLICE", "VERIFY", "REVIEW", "ACCEPT", "RELEASE"]),
+    gate: z.enum(["INTENT", "DISCOVERY", "PLAN", "VERIFY", "REVIEW", "ACCEPT", "DELIVER"]),
     claim: z.string().min(1),
     expectedRevision: z.number().int().min(0),
   })
@@ -353,20 +417,63 @@ export const ApprovalResolveInputSchema = z
   .strict();
 export const ApprovalInputSchema = z.union([ApprovalOpenInputSchema, ApprovalResolveInputSchema]);
 
-export const HandoffPrepareInputSchema = z
+/** One bounded unit of delegated work. */
+export const HandoffUnitSchema = z
   .object({
-    action: z.literal("prepare"),
-    expectedRevision: z.number().int().min(0),
-    role: z.enum(["explorer", "product", "architect", "designer", "builder", "verifier", "security", "release"]),
+    role: SpecialistRoleSchema,
     objective: z.string().min(1),
     context: z.array(z.string()),
-    allowedScope: z.array(z.string()),
+    /**
+     * What this unit may touch. Required, and non-empty: a unit with no
+     * boundary has no scope to enforce, and scope that is not enforced is a
+     * promise rather than a control.
+     */
+    allowedScope: z.array(z.string()).min(1),
     prohibitedScope: z.array(z.string()),
     questions: z.array(z.string()),
     requiredEvidence: z.array(z.string()),
     stopCondition: z.string().min(1),
+    /** Skills the specialist must load before acting. */
+    skills: z.array(z.string()).optional(),
+    /** Handoff ids that must complete before this one can start. */
+    dependsOn: z.array(z.string()).optional(),
   })
   .strict();
+
+export const HandoffPrepareInputSchema = z
+  .object({
+    action: z.literal("prepare"),
+    expectedRevision: z.number().int().min(0),
+    role: SpecialistRoleSchema,
+    objective: z.string().min(1),
+    context: z.array(z.string()),
+    /** What this unit may touch. Non-empty: a unit with no boundary has no
+     * scope to enforce. */
+    allowedScope: z.array(z.string()).min(1),
+    prohibitedScope: z.array(z.string()),
+    questions: z.array(z.string()),
+    requiredEvidence: z.array(z.string()),
+    stopCondition: z.string().min(1),
+    /** Skills the specialist must load before acting. */
+    skills: z.array(z.string()).optional(),
+    /** Handoff ids that must complete before this one can start. */
+    dependsOn: z.array(z.string()).optional(),
+  })
+  .strict();
+
+/**
+ * A whole wave in one call. Preparing a wave as a single mutation costs one
+ * revision bump instead of one per unit, which is what keeps the leader's
+ * revision stable while a wave is in flight.
+ */
+export const HandoffPrepareWaveInputSchema = z
+  .object({
+    action: z.literal("prepareWave"),
+    expectedRevision: z.number().int().min(0),
+    units: z.array(HandoffUnitSchema).min(1),
+  })
+  .strict();
+
 export const HandoffCompleteInputSchema = z
   .object({
     action: z.literal("complete"),
@@ -385,6 +492,7 @@ export const HandoffCancelInputSchema = z
   .strict();
 export const HandoffInputSchema = z.union([
   HandoffPrepareInputSchema,
+  HandoffPrepareWaveInputSchema,
   HandoffCompleteInputSchema,
   HandoffCancelInputSchema,
 ]);

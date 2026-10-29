@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createRuntime, type LindoRuntime } from "../../src/runtime.js";
+import { createRuntime, type AgentTeamRuntime } from "../../src/runtime.js";
 import { registerTools } from "../../src/tools/index.js";
 import { registerCommands } from "../../src/catalog/command-registration.js";
 import { registerSkills } from "../../src/catalog/skill-registration.js";
@@ -25,7 +25,7 @@ function mockCtx(): { ctx: never; calls: Record<string, number> } {
   const hook = async () => ({ dispose: async () => {} });
   const ctx = {
     options: {},
-    location: { project: { canonical: "/tmp/lindo-test" } },
+    location: { project: { canonical: "/tmp/agent-team-test" } },
     tool: { transform, reload: async () => {}, list: async () => [], hook },
     command: { transform, reload: async () => {}, list: async () => [] },
     skill: { transform, reload: async () => {}, list: async () => [] },
@@ -41,15 +41,15 @@ function mockCtx(): { ctx: never; calls: Record<string, number> } {
 }
 
 describe("plugin registration contracts", () => {
-  it("registers 7 lindo tools, 15 commands, 14 skills, 5 hook groups without throwing", async () => {
+  it("registers 8 agent-team tools, 14 commands and 17 skills without throwing", async () => {
     const { ctx } = mockCtx();
-    const runtime = createRuntime(ctx as never, { profile: "public", strictEvidence: true, projectState: ".lindo", model: { providerID: "opencode", modelID: "muse-spark-1.3", defaultVariant: "high" }, telemetry: false } as never);
+    const runtime = createRuntime(ctx as never, { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false } as never);
     const addedTools: string[] = [];
     const toolExecutes: Array<(input: unknown, tool: unknown) => Promise<unknown>> = [];
     const toolEditor = {
       namespace() {},
       add(def: { name: string; execute: (input: unknown, tool: unknown) => Promise<unknown> }) {
-        addedTools.push(`lindo_${def.name}`);
+        addedTools.push(`agent_team_${def.name}`);
         toolExecutes.push(def.execute);
       },
       update() {}, remove() {}, list() { return []; }, get() { return undefined; },
@@ -69,13 +69,13 @@ describe("plugin registration contracts", () => {
       cb({ add(def: { id: string }) { addedSkills.push(def.id); skillDefs.push(def as unknown as Record<string, unknown>); }, list: () => [], get: () => undefined, update: () => {}, remove: () => {} });
       return { dispose: async () => {} };
     };
-    await registerTools(runtime as LindoRuntime);
-    await registerCommands(runtime as LindoRuntime);
-    await registerSkills(runtime as LindoRuntime);
-    await registerHooks(runtime as LindoRuntime);
-    expect(addedTools.sort()).toEqual(["lindo_evaluate_gate", "lindo_handoff", "lindo_record_assumption", "lindo_record_decision", "lindo_request_approval", "lindo_state", "lindo_submit_evidence"]);
-    expect(addedCommands).toHaveLength(15);
-    expect(addedSkills).toHaveLength(14);
+    await registerTools(runtime as AgentTeamRuntime);
+    await registerCommands(runtime as AgentTeamRuntime);
+    await registerSkills(runtime as AgentTeamRuntime);
+    await registerHooks(runtime as AgentTeamRuntime);
+    expect(addedTools.sort()).toEqual(["agent_team_define_delivery", "agent_team_evaluate_gate", "agent_team_handoff", "agent_team_record_assumption", "agent_team_record_decision", "agent_team_request_approval", "agent_team_state", "agent_team_submit_evidence"]);
+    expect(addedCommands).toHaveLength(14);
+    expect(addedSkills).toHaveLength(17);
     // Regression: Skill.Info requires absolute `path` (server disables the
     // plugin on schema mismatch); `location` is not a valid key.
     for (const def of skillDefs) {
@@ -83,10 +83,66 @@ describe("plugin registration contracts", () => {
       expect(def).not.toHaveProperty("location");
       expect(def["content"]).toContain("## ");
     }
-    // Execute every registered wrapper once (validation errors still cover the wiring).
-    expect(toolExecutes).toHaveLength(7);
+    // Execute every registered wrapper once. A wrapper must reject empty
+    // input with a validation or domain error; a wiring error (a TypeError,
+    // an undefined import) means the tool is not connected to its
+    // implementation at all and must fail this test rather than be
+    // swallowed.
+    expect(toolExecutes).toHaveLength(8);
     for (const execute of toolExecutes) {
-      await (execute as (input: unknown, tool: unknown) => Promise<unknown>)({}, { sessionID: "s", agent: "lindo" }).catch(() => undefined);
+      const outcome = await (execute as (input: unknown, tool: unknown) => Promise<unknown>)({}, { sessionID: "s", agent: "team-leader" }).then(
+        () => ({ threw: false as const, error: undefined as unknown }),
+        (error: unknown) => ({ threw: true as const, error }),
+      );
+      if (!outcome.threw) continue;
+      expect(outcome.error).toBeInstanceOf(Error);
+      expect((outcome.error as Error).constructor.name).not.toBe("TypeError");
+      expect((outcome.error as Error).constructor.name).not.toBe("ReferenceError");
     }
+  });
+
+  it("keeps every tool input closed and in sync with its Zod schema", async () => {
+    const { AGENT_TEAM_STATE_TOOL } = await import("../../src/tools/state.js");
+    const { ASSUMPTION_TOOL } = await import("../../src/tools/assumption.js");
+    const { DECISION_TOOL } = await import("../../src/tools/decision.js");
+    const { EVIDENCE_TOOL } = await import("../../src/tools/evidence.js");
+    const { GATE_TOOL } = await import("../../src/tools/gate.js");
+    const { APPROVAL_TOOL } = await import("../../src/tools/approval.js");
+    const { HANDOFF_TOOL } = await import("../../src/tools/handoff.js");
+    const { DELIVERY_TOOL } = await import("../../src/tools/delivery.js");
+    const tools = [
+      AGENT_TEAM_STATE_TOOL,
+      ASSUMPTION_TOOL,
+      DECISION_TOOL,
+      EVIDENCE_TOOL,
+      GATE_TOOL,
+      APPROVAL_TOOL,
+      HANDOFF_TOOL,
+      DELIVERY_TOOL,
+    ];
+    for (const tool of tools) {
+      expect(tool.input.additionalProperties).toBe(false);
+      expect(tool.input.type).toBe("object");
+      expect(Array.isArray(tool.input.required)).toBe(true);
+    }
+    // The declared enums must match the canonical domain enums.
+    const { HANDOFF_ROLES } = await import("../../src/domain/handoff.js");
+    const { SpecialistRoleSchema } = await import("../../src/domain/schemas.js");
+    const handoff = HANDOFF_TOOL.input.properties["role"] as { enum: readonly string[] };
+    expect(handoff.enum).toEqual([...HANDOFF_ROLES]);
+    expect(handoff.enum).toEqual([...SpecialistRoleSchema.options]);
+    const gate = GATE_TOOL.input.properties["gate"] as { enum: readonly string[] };
+    expect(gate.enum).toEqual(["INTENT", "DISCOVERY", "PLAN", "VERIFY", "REVIEW", "ACCEPT", "DELIVER"]);
+    // The handoff carries the wave graph and the assigned skills.
+    expect(HANDOFF_TOOL.input.properties).toHaveProperty("skills");
+    expect(HANDOFF_TOOL.input.properties).toHaveProperty("dependsOn");
+    // A handoff must declare a scope: a unit with no boundary has no scope
+    // to enforce, so the declared schema requires one.
+    const allowedScope = HANDOFF_TOOL.input.properties["allowedScope"] as { minItems?: number };
+    expect(allowedScope.minItems).toBe(1);
+    const waveUnits = HANDOFF_TOOL.input.properties["units"] as {
+      items: { properties: Record<string, { minItems?: number }> };
+    };
+    expect(waveUnits.items.properties["allowedScope"]?.minItems).toBe(1);
   });
 });

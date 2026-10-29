@@ -1,7 +1,8 @@
 import { RecordDecisionInputSchema } from "../domain/schemas.js";
-import { appendEvent, readState, storeContext, writeDecisionDoc } from "../ledger/store.js";
+import { appendEvent, writeDecisionDoc  } from "../ledger/store.js";
 import { decisionId } from "../util/ids.js";
-import { projectRootOf, toolOk, type LindoRuntime } from "../runtime.js";
+import { toolOk, type AgentTeamRuntime } from "../runtime.js";
+import { openLedger } from "./ledger.js";
 import type { ToolContext } from "@opencode/plugin/promise/tool";
 
 export const DECISION_TOOL = {
@@ -35,21 +36,26 @@ export const DECISION_TOOL = {
       authority: { type: "string", enum: ["ALLOW", "ALLOW_WITH_RECORD", "ASK"] },
       evidenceRefs: { type: "array", items: { type: "string" } },
     },
-    required: ["expectedRevision", "title", "context", "drivers", "options", "decision", "rationale", "consequences", "reversibility", "authority"],
+    required: ["expectedRevision", "title", "context", "drivers", "options", "decision", "rationale", "consequences", "reversibility", "authority", "evidenceRefs"],
     additionalProperties: false,
   },
 } as const;
 
-export async function executeDecision(runtime: LindoRuntime, rawInput: unknown, tool: ToolContext): Promise<{ content: string }> {
+export async function executeDecision(runtime: AgentTeamRuntime, rawInput: unknown, tool: ToolContext): Promise<{ content: string }> {
   const parsed = RecordDecisionInputSchema.safeParse(rawInput);
   if (!parsed.success) throw new Error(`invalid decision input: ${parsed.error.message}`);
   const input = parsed.data;
-  const projectRoot = projectRootOf(runtime.ctx);
-  const current = await readState(projectRoot);
-  if (!current) throw new Error("lindo state not initialized");
-  if (input.expectedRevision !== current.revision) throw new Error(`stale revision: expected ${input.expectedRevision}, actual ${current.revision}`);
-  const sessionId = String((tool as unknown as { sessionID?: string }).sessionID ?? "unknown");
-  const agent = String((tool as unknown as { agent?: string }).agent ?? "lindo");
+  const { projectRoot, current, ctx } = await openLedger(runtime, tool, input.expectedRevision, "record a decision");
+  // A decision must be anchored in the epistemic record. Without this, a
+  // decision is a preference with no recorded basis, and nothing in the ledger
+  // separates what was verified from what is merely proposed.
+  const known = [...current.assumptions.map((a) => a.id), ...current.evidence.map((e) => e.id)];
+  const anchored = input.evidenceRefs.filter((ref) => known.includes(ref));
+  if (anchored.length === 0) {
+    throw new Error(
+      `a decision must cite at least one existing assumption or evidence id in evidenceRefs (known: ${known.join(", ") || "none yet — record one with agent_team_record_assumption or agent_team_submit_evidence first"})`,
+    );
+  }
   const id = decisionId(current.decisions.length + 1);
   const record = {
     id,
@@ -62,10 +68,9 @@ export async function executeDecision(runtime: LindoRuntime, rawInput: unknown, 
     consequences: input.consequences,
     reversibility: input.reversibility,
     authority: input.authority,
-    evidenceRefs: input.evidenceRefs ?? [],
+    evidenceRefs: input.evidenceRefs,
     createdAt: new Date().toISOString(),
   };
-  const ctx = storeContext(projectRoot, sessionId, agent);
   const next = await appendEvent(ctx, "decision.recorded", { id, title: input.title }, (s) => ({
     ...s,
     decisions: [...s.decisions, record],

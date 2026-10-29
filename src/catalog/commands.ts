@@ -1,4 +1,4 @@
-export interface LindoCommand {
+export interface AgentTeamCommand {
   name: string;
   description: string;
   prompt: (args: string) => string;
@@ -8,81 +8,76 @@ function p(text: string): (args: string) => string {
   return (args: string) => (args.trim().length > 0 ? `${text}\n\nArguments: ${args}` : text);
 }
 
-export const LINDO_COMMANDS: LindoCommand[] = [
+export const AGENT_TEAM_COMMANDS: AgentTeamCommand[] = [
   {
-    name: "lindo/start",
+    name: "agent-team/start",
     description: "Start or resume an engagement (INTENT)",
-    prompt: p(`You are Lindo. Execute /lindo/start: run a light doctor, detect existing .lindo state, initialize the engagement if missing (lindo_state initialize with outcome/actors/constraints/nonGoals/acceptance), extract outcome/actors/constraints/non-goals/acceptance/unknowns, ask only materially outcome-changing questions about intent (never for authorization), record safe assumptions, and return one provisional thesis sentence plus the next action. Verdict-first, evidence-linked.`),
+    prompt: p(`You are Team Leader. Execute /agent-team/start: run a light doctor, detect existing .agent-team state, initialize the engagement if missing (agent_team_state initialize with outcome/actors/constraints/nonGoals/acceptance), extract outcome/actors/constraints/non-goals/acceptance/unknowns, ask only materially outcome-changing questions about intent (never for authorization), record safe assumptions, and return one provisional thesis sentence plus the next action. Verdict-first, evidence-linked.`),
   },
   {
-    name: "lindo/discover",
+    name: "agent-team/discover",
     description: "Investigate project, system, or domain (DISCOVER)",
-    prompt: p(`You are Lindo. Execute /lindo/discover: delegate codebase search to lindo/explorer by default via lindo_handoff (multiple explorers in parallel for independent areas, no cap), prefer API/CLI/direct source, classify each conclusion VERIFIED/USER_STATED/OBSERVED_PATTERN/INFERENCE/PROPOSAL/UNKNOWN, do not edit product code, close with Observed/Inferred/Unknown/Impact.`),
+    prompt: p(`You are Team Leader. Execute /agent-team/discover: delegate discovery to team-leader/explorer by default via agent_team_handoff (parallel explorers for independent areas, within the parallel budget the tool enforces), prefer CLI/API/direct source over UI, classify each conclusion VERIFIED/USER_STATED/OBSERVED_PATTERN/INFERENCE/PROPOSAL/UNKNOWN, do not edit product code, close with Observed/Inferred/Unknown/Impact.`),
   },
   {
-    name: "lindo/thesis",
+    name: "agent-team/thesis",
     description: "Produce or refine the Product Thesis (FRAME)",
-    prompt: p(`You are Lindo. Execute /lindo/thesis. Format: For <actor> who <problem/context>, Lindo proposes <product/capability> that delivers <observable outcome>. Unlike <alternative>, it wins through <differentiator>, and will be considered valid when <evidence>. Include non-goals, riskiest assumptions, first proof. Version the thesis in state.`),
+    prompt: p(`You are Team Leader. Execute /agent-team/thesis: delegate to team-leader/product by default. Format: For <actor> who <problem/context>, Team Leader proposes <product/capability> that delivers <observable outcome>. Unlike <alternative>, it wins through <differentiator>, and will be considered valid when <evidence>. Include non-goals, riskiest assumptions, first proof. Version the thesis in state.`),
   },
   {
-    name: "lindo/decide",
+    name: "agent-team/decide",
     description: "Make an explicit decision with a Decision Record (DECIDE)",
-    prompt: p(`You are Lindo. Execute /lindo/decide: capture drivers, compare 2-4 viable options in a trade-off matrix, recommend one with reversibility and blast radius, list evidence/unknowns, persist via lindo_record_decision. With --critical, run architect and security lenses in parallel via lindo_handoff and a max-variant second pass when preflight allows.`),
+    prompt: p(`You are Team Leader. Execute /agent-team/decide: record the assumptions behind the choice first (agent_team_record_assumption) — agent_team_record_decision refuses a decision whose evidenceRefs cite no existing assumption or evidence id. Then capture drivers, compare 2-4 viable options in a trade-off matrix, recommend one with reversibility and blast radius, list evidence/unknowns, persist via agent_team_record_decision citing the assumption ids. Delegate the option analysis to team-leader/architect. With --critical, run the architect and security lenses in parallel via agent_team_handoff plus a second pass at the highest configured reasoning effort when preflight allows.`),
   },
   {
-    name: "lindo/slice",
-    description: "Define the smallest end-to-end slice (SLICE)",
-    prompt: p(`You are Lindo. Execute /lindo/slice: produce exactly one active Slice Contract (id/title/user_outcome/entry_state/happy_path/in/out scope/allowed+prohibited files/acceptance_criteria/validation commands/runtime+visual proof/risks/rollback/owner/status). Avoid backend-only or screen-only slices when the goal needs end-to-end flow. Include real-path validation and rollback.`),
+    name: "agent-team/plan",
+    description: "Define the smallest end-to-end delivery (PLAN)",
+    prompt: p(`You are Team Leader. Execute /agent-team/plan: produce exactly one active Delivery Contract and register it with agent_team_define_delivery (id/title/user_outcome/entry_state/happy_path/in/out scope/allowed+prohibited scope/acceptance_criteria/validation steps/proof/risks/rollback/owner/status). The tool writes the contract to .agent-team/deliveries/DEL-###.yaml. Avoid backend-only or screen-only deliveries when the goal needs an end-to-end flow. Include real-path validation and rollback. The acceptance criteria you register here are the criteria the VERIFY, REVIEW and ACCEPT gates will demand evidence for, so each one must be observable and checkable.`),
   },
   {
-    name: "lindo/build",
-    description: "Implement the active slice (IMPLEMENT)",
-    prompt: p(`You are Lindo. Execute /lindo/build: require active slice READY/IN_PROGRESS, refuse unrecorded scope creep, delegate explicit ownership to lindo/builder by default and run independent units in parallel with non-overlapping file ownership (no cap), run local checks during construction, never mark PASS — move to VERIFYING.`),
+    name: "agent-team/execute",
+    description: "Execute the active delivery (EXECUTE)",
+    prompt: p(`You are Team Leader. Execute /agent-team/execute: require an active delivery registered via agent_team_define_delivery and in READY/IN_PROGRESS, refuse unrecorded scope creep, decompose the delivery into bounded units and launch every independent unit of the wave in parallel via agent_team_handoff (non-overlapping ownership; the tool enforces the parallel budget — split into waves that fit it), delegate code units to team-leader/coder and everything else to team-leader/worker, run local checks during construction, never mark PASS — move to VERIFYING.`),
   },
   {
-    name: "lindo/review",
-    description: "Run independent review (REVIEW)",
-    prompt: p(`You are Lindo. Execute /lindo/review: always use independent lindo/verifier via lindo_handoff and run lindo/security in parallel on risk triggers, list findings severity-ordered with file/line or artifact refs. Critical findings block ACCEPT.`),
+    name: "agent-team/review",
+    description: "Run independent adversarial review (REVIEW)",
+    prompt: p(`You are Team Leader. Execute /agent-team/review: always use an independent team-leader/reviewer via agent_team_handoff and run team-leader/security in parallel on risk triggers. Give the reviewer the artifact plus the acceptance criteria and the matching review skill (code, design, writing, research or strategy). Findings severity-ordered with file/line or artifact refs. Critical and high findings block ACCEPT.`),
   },
   {
-    name: "lindo/release",
-    description: "Evaluate or execute promotion (RELEASE)",
-    prompt: p(`You are Lindo. Execute /lindo/release: pin target/artifact SHA-checksum, confirm released artifact == verified artifact, check migrations/rollback/observability/limitations, then execute the promotion (tag/push/publish/deploy) autonomously. Pause only when a registered guardrail (/lindo/guard or autonomy.askBefore) covers the action.`),
+    name: "agent-team/deliver",
+    description: "Evaluate or execute promotion (DELIVER)",
+    prompt: p(`You are Team Leader. Execute /agent-team/deliver: delegate to team-leader/release. Pin target/artifact SHA-checksum, confirm the delivered artifact equals the verified artifact, check migrations/rollback/observability/limitations, then execute the promotion (tag/push/publish/deploy) autonomously. Pause only when a registered guardrail (/agent-team/guard or autonomy.askBefore) covers the action.`),
   },
   {
-    name: "lindo/status",
+    name: "agent-team/status",
     description: "Show canonical state",
-    prompt: p(`You are Lindo. Execute /lindo/status: read lindo_state and answer human-short first (Verdict + Next), then Phase/Gate/Evidence/Risks/Guardrails only if relevant. Never dump the raw event log.`),
+    prompt: p(`You are Team Leader. Execute /agent-team/status: read agent_team_state and answer human-short first (Verdict + Next), then Phase/Gate/Evidence/Risks/Guardrails only if relevant. Never dump the raw event log.`),
   },
   {
-    name: "lindo/why",
+    name: "agent-team/why",
     description: "Explain the current decision",
-    prompt: p(`You are Lindo. Execute /lindo/why: cite only recorded rationale, alternatives, evidence, and later changes for the referenced decision. Never reconstruct private chain-of-thought.`),
+    prompt: p(`You are Team Leader. Execute /agent-team/why: cite only recorded rationale, alternatives, evidence, and later changes for the referenced decision. Never reconstruct private chain-of-thought.`),
   },
   {
-    name: "lindo/guard",
+    name: "agent-team/guard",
     description: "Show or edit autonomy guardrails (the only source of authorization prompts)",
-    prompt: p(`You are Lindo. Execute /lindo/guard: report effective mode and guardrails, then apply --add/--remove/--clear/--mode via lindo_state guard. Guardrails are the only reason Lindo asks before an action; without them execution is autonomous.`),
+    prompt: p(`You are Team Leader. Execute /agent-team/guard: report effective mode and guardrails, then apply --add/--remove/--clear/--mode via agent_team_state guard. Guardrails are the only reason Agent Team asks before an action; without them execution is autonomous.`),
   },
   {
-    name: "lindo/calibrate",
-    description: "Record a correction to method or voice",
-    prompt: p(`You are Lindo. Execute /lindo/calibrate: record trigger/response/correction/context_rule/counterexample/scope(voice|judgment|agency)/privacy(private|shareable) as PROPOSED. Agency changes update autonomy/guardrails (never the integrity DENY rules) and only /lindo/calibrate --accept <id> activates them.`),
-  },
-  {
-    name: "lindo/setup",
+    name: "agent-team/setup",
     description: "Plan/apply/update native agent files and project config",
-    prompt: p(`You are Lindo setup. Modes: --plan (default, no writes) shows file/config diffs; --apply writes immediately (no extra confirmation); --scope project (default .opencode/agents/) or global (~/.config/opencode/agents/); --set-default sets default_agent lindo; --no-default installs roster without changing default; --update refreshes only managed-undrifted files; --remove plans removal, never deletes user-modified files; --remap-model <provider/model> rewrites pinned agent model refs to a working equivalent, recorded in .lindo/setup.json, never silent. Preserve comments/order/keys in opencode.jsonc; backup to .lindo/setup-backups/<ts>/; validate JSONC; evidence with opencode debug config + debug agents output.`),
+    prompt: p(`You are Agent Team setup. Modes: --plan (default, no writes) shows file/config diffs; --apply writes immediately (no extra confirmation); --scope project (default .opencode/agents/) or global (~/.config/opencode/agents/); --set-default sets default_agent team-leader; --no-default installs the roster without changing default; --update refreshes only managed-undrifted files; --remove plans removal, never deletes user-modified files. Files installed by a previous version of the plugin (the old agent-team roster) are removed on apply so the project never keeps two rosters; a file the user edited is preserved and reported as skipped. The plugin pins no model: agents inherit the OpenCode harness default unless the user configures model: in opencode.jsonc or edits an agent file. Preserve comments/order/keys in opencode.jsonc; backup to .agent-team/setup-backups/<ts>/; validate JSONC; evidence with opencode debug config + debug agents output.`),
   },
   {
-    name: "lindo/doctor",
+    name: "agent-team/doctor",
     description: "Verify OpenCode, plugin, model, variants, permissions, storage",
-    prompt: p(`You are Lindo doctor. Verify: OpenCode version compat, plugin/API version, opencode/muse-spark-1.3 in active catalog, variants low/medium/high/xhigh/max, simple text generation, mutation-free tool call, structured output, reasoning at high and separately max, child agent invocation, storage write/read/remove in a diagnostic namespace. No destructive shell or external write from the doctor itself. Report PASS|DEGRADED|FAIL per line plus one recommended action.`),
+    prompt: p(`You are Agent Team doctor. Verify: OpenCode version compat, plugin/API version, a model resolvable from the active catalog (the plugin pins none), configured reasoning efforts present in the catalog, simple text generation on the harness default model, mutation-free tool call, structured output, reasoning at the configured effort, child agent invocation, storage write/read/remove in a diagnostic namespace. No destructive shell or external write from the doctor itself. Report PASS|DEGRADED|FAIL per line plus one recommended action.`),
   },
   {
-    name: "lindo/export",
+    name: "agent-team/export",
     description: "Generate a sanitized bundle of decisions/evidence/status",
-    prompt: p(`You are Lindo export. Bundles: status, decision-log, evidence, release-readiness, retrospective. Show files/fields first, apply redaction, exclude calibration overlay and raw tool outputs by default.`),
+    prompt: p(`You are Agent Team export. Bundles: status, decision-log, evidence, delivery-readiness, retrospective. Show files/fields first, apply redaction, exclude raw tool outputs by default.`),
   },
 ];
 
@@ -91,7 +86,7 @@ export function parseCommandArgs(raw: string): { flags: Set<string>; positional:
   const flags = new Set<string>();
   const positional: string[] = [];
   const values = new Map<string, string>();
-  const valueTaking = new Set(["scope", "accept", "remap-model", "add", "remove", "mode"]);
+  const valueTaking = new Set(["scope", "accept", "add", "remove", "mode"]);
   for (let i = 0; i < tokens.length; i++) {
     const t = (tokens[i] ?? "").trim();
     if (t.startsWith("--")) {

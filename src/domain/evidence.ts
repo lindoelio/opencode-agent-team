@@ -8,6 +8,8 @@ const SUPPORTS: Record<EvidenceRef["kind"], string[]> = {
   source: ["source inspected"],
   review: ["independent review completed"],
   release: ["release candidate passed defined checks"],
+  document: ["artifact exists", "document produced"],
+  metric: ["number moved", "metric measured"],
 };
 
 const FORBIDDEN: Array<{ evidence: EvidenceRef["kind"]; claim: RegExp; reason: string }> = [
@@ -17,10 +19,24 @@ const FORBIDDEN: Array<{ evidence: EvidenceRef["kind"]; claim: RegExp; reason: s
   { evidence: "review", claim: /production.*healthy|deployed/i, reason: "review is not deploy proof" },
 ];
 
-export function claimSupported(kind: EvidenceRef["kind"], claim: string): { ok: boolean; reason?: string } {
+/**
+ * A claim that this kind of evidence may not support at all.
+ *
+ * Unlike `claimSupported`, which answers "does this kind of evidence back
+ * this canonical claim", this answers "is this claim forbidden for this kind
+ * of evidence" — the case where the claim is stronger than the evidence can
+ * ever be, such as proving production health from unit tests.
+ */
+export function forbiddenClaim(kind: EvidenceRef["kind"], claim: string): string | undefined {
   for (const f of FORBIDDEN) {
-    if (f.evidence === kind && f.claim.test(claim)) return { ok: false, reason: f.reason };
+    if (f.evidence === kind && f.claim.test(claim)) return f.reason;
   }
+  return undefined;
+}
+
+export function claimSupported(kind: EvidenceRef["kind"], claim: string): { ok: boolean; reason?: string } {
+  const forbidden = forbiddenClaim(kind, claim);
+  if (forbidden) return { ok: false, reason: forbidden };
   const supported = SUPPORTS[kind] ?? [];
   if (supported.some((s) => claim.toLowerCase().includes(s))) return { ok: true };
   // Conservative default: unknown claims need explicit review evidence.

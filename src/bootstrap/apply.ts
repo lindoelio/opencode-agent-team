@@ -1,13 +1,28 @@
 import * as fs from "node:fs";
 import { homedir } from "node:os";
 import { loadTemplates } from "../catalog/agents.js";
-import { backupFile, isManaged, mergeProjectConfig, withHeader, applyModelRemapToTemplates, writeModelRemap } from "./jsonc.js";
-import { resolveTargetAbs, resolveEffectiveRemap, type SetupOptions } from "./plan.js";
+import { backupFile, checksumOf, isManaged, mergeProjectConfig, planStaleManagedFiles, stripHeader, withHeader } from "./jsonc.js";
+import { resolveTargetAbs, type SetupOptions } from "./plan.js";
+import { LEGACY_MANAGED_AGENT_FILES } from "./managed-files.js";
 import { atomicWriteFile } from "../util/atomic-file.js";
+
+/**
+ * True when a managed file drifted: its body no longer matches the shipped
+ * checksum and no longer matches the template. A header-only difference
+ * (corrupted checksum over an intact body) is a repair, not a drift.
+ */
+function isDrifted(existing: string, template: string): boolean {
+  const meta = isManaged(existing);
+  if (!meta) return false;
+  const body = stripHeader(existing);
+  if (body === stripHeader(template)) return false;
+  return meta.checksum !== checksumOf(body);
+}
 
 export interface ApplyResult {
   created: string[];
   updated: string[];
+  removed: string[];
   skipped: string[];
   backups: string[];
   configChanged: boolean;
@@ -16,16 +31,13 @@ export interface ApplyResult {
 export async function applySetupPlan(opts: SetupOptions): Promise<ApplyResult> {
   const root = opts.scope === "global" ? (opts.homeDir ?? homedir()) : opts.projectRoot;
   const templates = await loadTemplates();
-  // Persist an explicit remediation choice before writing, so plans stay consistent.
-  if (opts.modelRemap) await writeModelRemap(root, opts.modelRemap);
-  const modelRemap = await resolveEffectiveRemap(root, opts.modelRemap);
-  const effective = modelRemap ? applyModelRemapToTemplates(templates, modelRemap) : templates;
   const created: string[] = [];
   const updated: string[] = [];
+  const removed: string[] = [];
   const skipped: string[] = [];
   const backups: string[] = [];
 
-  for (const [rel, template] of effective) {
+  for (const [rel, template] of templates) {
     // --update: only touch managed-undrifted files.
     const abs = resolveTargetAbs(root, rel, opts.scope);
     let existing: string | null = null;
@@ -42,6 +54,13 @@ export async function applySetupPlan(opts: SetupOptions): Promise<ApplyResult> {
       skipped.push(rel); // never overwrite user content
       continue;
     }
+    // A managed file the user edited is drifted: the recorded checksum no longer
+    // matches its body. The plan already reports it as keep-drifted; the apply
+    // must honor that and leave it untouched.
+    if (existing !== null && isDrifted(existing, template)) {
+      skipped.push(rel);
+      continue;
+    }
     const next = withHeader(template, "1");
     if (existing === next) {
       skipped.push(rel);
@@ -51,6 +70,19 @@ export async function applySetupPlan(opts: SetupOptions): Promise<ApplyResult> {
     await atomicWriteFile(abs, next);
     if (existing === null) created.push(rel);
     else updated.push(rel);
+  }
+
+  // Roster files from an earlier version of the plugin: removed on apply so a
+  // project never keeps two rosters. A file the user edited is preserved.
+  for (const stale of await planStaleManagedFiles(root, LEGACY_MANAGED_AGENT_FILES)) {
+    if (stale.action !== "remove-managed") {
+      skipped.push(stale.path);
+      continue;
+    }
+    const abs = resolveTargetAbs(root, stale.path, opts.scope);
+    backups.push(await backupFile(root, abs));
+    await fs.promises.rm(abs);
+    removed.push(stale.path);
   }
 
   // opencode.jsonc merge (project scope only writes config; global never touches project config)
@@ -73,5 +105,5 @@ export async function applySetupPlan(opts: SetupOptions): Promise<ApplyResult> {
       configChanged = true;
     }
   }
-  return { created, updated, skipped, backups, configChanged };
+  return { created, updated, removed, skipped, backups, configChanged };
 }

@@ -1,9 +1,9 @@
 import { SKILL_IDS, frontmatterDescription, frontmatterName, loadSkillContents } from "./skills.js";
 import { packageRoot } from "./agents.js";
 import * as path from "node:path";
-import type { LindoRuntime } from "../runtime.js";
+import type { AgentTeamRuntime } from "../runtime.js";
 
-export async function registerSkills(runtime: LindoRuntime): Promise<{ dispose: () => Promise<void> }> {
+export async function registerSkills(runtime: AgentTeamRuntime): Promise<{ dispose: () => Promise<void> }> {
   const contents = await loadSkillContents();
   const root = packageRoot();
   const registration = await runtime.ctx.skill.transform((editor: any) => {

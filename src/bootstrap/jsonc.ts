@@ -6,7 +6,7 @@ import { sha256Hex } from "../util/hash.js";
 
 export interface SetupPlanFile {
   path: string;
-  action: "create" | "update-managed" | "keep-drifted" | "keep";
+  action: "create" | "update-managed" | "keep-drifted" | "keep" | "remove-managed";
   reason: string;
 }
 
@@ -17,7 +17,7 @@ export interface SetupPlan {
 }
 
 export function managedHeader(version: string, checksum: string): string {
-  return `\n<!-- LINDO-MANAGED version=${version} checksum=${checksum} -->\n`;
+  return `\n<!-- AGENT-TEAM-MANAGED version=${version} checksum=${checksum} -->\n`;
 }
 
 export function checksumOf(content: string): string {
@@ -25,7 +25,7 @@ export function checksumOf(content: string): string {
 }
 
 export function isManaged(content: string): { version: string; checksum: string } | null {
-  const m = content.match(/LINDO-MANAGED version=([^\s]+) checksum=([^\s>]+)/);
+  const m = content.match(/AGENT-TEAM-MANAGED version=([^\s]+) checksum=([^\s>]+)/);
   if (!m) return null;
   return { version: m[1] ?? "?", checksum: (m[2] ?? "?").replace(/-->$/, "") };
 }
@@ -70,7 +70,7 @@ export async function planManagedFiles(projectRoot: string, templates: Map<strin
 export function stripHeader(content: string): string {
   // Managed marker is a trailing HTML comment on its own line; frontmatter must stay at byte 0.
   // Legacy leading markers are also stripped for migration.
-  return content.replace(/<!-- LINDO-MANAGED[^>]*-->\n?$/, "").replace(/^<!-- LINDO-MANAGED[^>]*-->\n?/, "");
+  return content.replace(/<!-- AGENT-TEAM-MANAGED[^>]*-->\n?$/, "").replace(/^<!-- AGENT-TEAM-MANAGED[^>]*-->\n?/, "");
 }
 
 export function withHeader(template: string, version: string): string {
@@ -100,8 +100,8 @@ export async function mergeProjectConfig(input: {
     throw new Error(`opencode.jsonc has parse errors: ${JSON.stringify(errors).slice(0, 500)}`);
   }
   let after = before.trim().length === 0 ? "{\n}\n" : before;
-  if (input.setDefault && (parsed as Record<string, unknown>)["default_agent"] !== "lindo") {
-    after = applyJsoncEdit(after, ["default_agent"], "lindo");
+  if (input.setDefault && (parsed as Record<string, unknown>)["default_agent"] !== "team-leader") {
+    after = applyJsoncEdit(after, ["default_agent"], "team-leader");
   }
   if (input.includePluginOptions) {
     const plugins = (parsed as Record<string, unknown>)["plugins"];
@@ -109,16 +109,68 @@ export async function mergeProjectConfig(input: {
     if (!Array.isArray(plugins)) {
       after = applyJsoncEdit(after, ["plugins"], [entry]);
     } else {
-      const idx = plugins.findIndex(
-        (p) => (typeof p === "string" && p === input.pluginPackage) || (p && typeof p === "object" && (p as Record<string, unknown>)["package"] === input.pluginPackage),
-      );
+      const idx = plugins.findIndex((p) => {
+        const spec = pluginSpecOf(p);
+        return spec !== undefined && samePlugin(spec, input.pluginPackage);
+      });
       if (idx === -1) {
         const next = [...plugins, entry];
         after = applyJsoncEdit(after, ["plugins"], next);
+      } else {
+        // Same package, possibly a different version or a local checkout. Two
+        // entries for the same package load two copies of the plugin, so the
+        // spec is updated in place. The user's own options are left alone.
+        const existing = plugins[idx];
+        const current = pluginSpecOf(existing)!;
+        const nextSpec = isLocalPath(current) ? current : input.pluginPackage;
+        if (nextSpec !== current) {
+          const next = [...plugins];
+          next[idx] = typeof existing === "string" ? nextSpec : { ...(existing as Record<string, unknown>), package: nextSpec };
+          after = applyJsoncEdit(after, ["plugins"], next);
+        }
       }
     }
   }
   return { path: configPath, before, after, changed: after !== before };
+}
+
+/** The package spec of a plugins entry, whether it is a bare string or an object. */
+function pluginSpecOf(entry: unknown): string | undefined {
+  if (typeof entry === "string") return entry;
+  if (entry && typeof entry === "object") {
+    const pkg = (entry as Record<string, unknown>)["package"];
+    return typeof pkg === "string" ? pkg : undefined;
+  }
+  return undefined;
+}
+
+/** Strips the version suffix: `@scope/name@1.2.3` -> `@scope/name`. */
+function packageNameOf(spec: string): string {
+  const at = spec.lastIndexOf("@");
+  return at > 0 ? spec.slice(0, at) : spec;
+}
+
+/** A local checkout path, not a registry spec. */
+function isLocalPath(spec: string): boolean {
+  return spec.startsWith("/") || spec.startsWith("./") || spec.startsWith("../") || spec.startsWith("file://");
+}
+
+/** Two specs refer to the same package when their names match, version aside. */
+function samePlugin(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (isLocalPath(a)) return path.basename(stripFileScheme(a)) === lastNameSegment(packageNameOf(b));
+  if (isLocalPath(b)) return path.basename(stripFileScheme(b)) === lastNameSegment(packageNameOf(a));
+  return packageNameOf(a) === packageNameOf(b);
+}
+
+function stripFileScheme(spec: string): string {
+  return spec.startsWith("file://") ? spec.slice("file://".length) : spec;
+}
+
+/** The last segment of a package name: `@scope/name` -> `name`. */
+function lastNameSegment(pkg: string): string {
+  const parts = pkg.split("/");
+  return parts[parts.length - 1] ?? pkg;
 }
 
 function applyJsoncEdit(text: string, jsonPath: (string | number)[], value: unknown): string {
@@ -128,7 +180,7 @@ function applyJsoncEdit(text: string, jsonPath: (string | number)[], value: unkn
 
 export async function backupFile(projectRoot: string, absPath: string): Promise<string> {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const dest = path.join(projectRoot, ".lindo", "setup-backups", stamp, path.basename(absPath));
+  const dest = path.join(projectRoot, ".agent-team", "setup-backups", stamp, path.basename(absPath));
   await fs.promises.mkdir(path.dirname(dest), { recursive: true });
   try {
     const content = await fs.promises.readFile(absPath, "utf8");
@@ -141,59 +193,29 @@ export async function backupFile(projectRoot: string, absPath: string): Promise<
   }
 }
 
-export interface ModelRemap {
-  from: string;
-  to: string;
-}
-
-const SETUP_STATE_FILE = ".lindo/setup.json";
-
 /**
- * Explicit model remediation, persisted per setup root. Never inferred:
- * a remap only exists after the user confirmed it (setup --remap-model).
+ * Managed files left behind by an earlier version of the plugin. A file is
+ * only a candidate when it still carries the managed marker: anything the
+ * user wrote or edited is left alone.
  */
-export async function readModelRemap(root: string): Promise<ModelRemap | null> {
-  try {
-    const raw = await fs.promises.readFile(path.join(root, SETUP_STATE_FILE), "utf8");
-    const parsed = JSON.parse(raw) as { version?: number; modelRemap?: ModelRemap };
-    if (parsed.version !== 1 || !parsed.modelRemap) return null;
-    const { from, to } = parsed.modelRemap;
-    if (typeof from !== "string" || typeof to !== "string" || !isProviderModelRef(to)) return null;
-    return { from, to };
-  } catch {
-    return null;
-  }
-}
-
-export async function writeModelRemap(root: string, remap: ModelRemap): Promise<string> {
-  if (!isProviderModelRef(remap.to)) throw new Error(`invalid model ref: ${remap.to} (expected provider/model)`);
-  const dest = path.join(root, SETUP_STATE_FILE);
-  await atomicWriteFile(dest, JSON.stringify({ version: 1, modelRemap: remap, updatedAt: new Date().toISOString() }, null, 2) + "\n");
-  return dest;
-}
-
-/** `provider/model` without variant. Variants (`#low`) stay on the agent lines. */
-export function isProviderModelRef(ref: string): boolean {
-  return /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(ref);
-}
-
-/**
- * Rewrite `model: <from>#<variant>` frontmatter lines to `<to>#<variant>`.
- * Frontmatter stays at byte 0; only model lines change.
- */
-export function applyModelRemapToTemplates(templates: Map<string, string>, remap: ModelRemap): Map<string, string> {
-  const out = new Map<string, string>();
-  const pattern = new RegExp(`^(model:\\s*)${escapeRegExp(remap.from)}(#[A-Za-z0-9_-]+)?\\s*$`, "m");
-  for (const [rel, content] of templates) {
-    if (!rel.endsWith(".md")) {
-      out.set(rel, content);
+export async function planStaleManagedFiles(root: string, candidates: readonly string[]): Promise<SetupPlanFile[]> {
+  const out: SetupPlanFile[] = [];
+  for (const rel of candidates) {
+    const abs = path.join(root, rel);
+    let existing: string;
+    try {
+      existing = await fs.promises.readFile(abs, "utf8");
+    } catch {
       continue;
     }
-    out.set(rel, content.replace(pattern, (_m, prefix: string, variant: string | undefined) => `${prefix}${remap.to}${variant ?? ""}`));
+    const meta = isManaged(existing);
+    if (!meta) continue; // not plugin-managed: not ours to touch
+    const body = stripHeader(existing);
+    if (meta.checksum === checksumOf(body)) {
+      out.push({ path: rel, action: "remove-managed", reason: "installed by a previous version; the roster was replaced" });
+    } else {
+      out.push({ path: rel, action: "keep-drifted", reason: "user edited a previous-version file; preserved" });
+    }
   }
   return out;
-}
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

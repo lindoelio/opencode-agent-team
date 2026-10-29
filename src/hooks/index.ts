@@ -1,11 +1,11 @@
-import type { LindoRuntime } from "../runtime.js";
+import type { AgentTeamRuntime } from "../runtime.js";
 import { registerContextHook } from "./context.js";
 import { registerPromptHook } from "./prompt.js";
 import { registerPermissionHook } from "./permission.js";
 import { registerRetryHook } from "./retry.js";
 import { registerToolAuditHooks } from "./tool-audit.js";
 
-export async function registerHooks(runtime: LindoRuntime): Promise<{ dispose: () => Promise<void> }> {
+export async function registerHooks(runtime: AgentTeamRuntime): Promise<{ dispose: () => Promise<void> }> {
   const regs = await Promise.all([
     registerContextHook(runtime),
     registerPromptHook(runtime),

@@ -1,19 +1,14 @@
-import { MODEL_PROFILE, isSupportedVariant } from "../catalog/model-profile.js";
-import type { LindoRuntime } from "../runtime.js";
+import { configuredReasoningEfforts } from "../catalog/model-options.js";
+import { packageRoot } from "../catalog/agents.js";
+import { describeHostCapabilities, hostHasRequiredSurface, hostVersionSupport, resolveTextGenerator, SUPPORTED_HOST_LINES, SUPPORTED_SDK_RANGE } from "../compat/host.js";
+import type { AgentTeamRuntime } from "../runtime.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 export interface DoctorCheck {
   name: string;
   status: "PASS" | "DEGRADED" | "FAIL";
   detail: string;
-}
-
-export interface ModelRemediation {
-  /** Pinned ref missing from the catalog, e.g. `opencode/muse-spark-1.3`. */
-  from: string;
-  /** Working equivalent found in the catalog, e.g. `opencode-go/muse-spark-1.3-contributor`. */
-  candidate: string;
-  /** Exact command applying it after explicit confirmation. */
-  instruction: string;
 }
 
 export interface DoctorReport {
@@ -22,24 +17,53 @@ export interface DoctorReport {
   recommendedAction: string;
   opencodeVersion: string;
   pluginVersion: string;
-  remediation?: ModelRemediation;
 }
 
-const PLUGIN_VERSION = "0.2.0";
+/**
+ * The plugin version is read from the shipped package, not hardcoded, so the
+ * doctor can never report a version the plugin is not.
+ */
+function pluginVersion(): string {
+  try {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(packageRoot(), "package.json"), "utf8"),
+    ) as { version?: string };
+    return manifest.version ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
 
-export async function runDoctor(runtime: LindoRuntime): Promise<DoctorReport> {
+export async function runDoctor(runtime: AgentTeamRuntime): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [];
   const opencodeVersion: string = String((runtime.ctx.app as unknown as { version?: string }).version ?? "unknown");
 
-  // 1. OpenCode version compat
+  // 1. OpenCode version compat. The plugin supports the 2.0.x, 2.1.x and
+  // 2.2.x host lines; anything else is DEGRADED (it may still work, but it
+  // is not a line this plugin is verified against).
+  const support = hostVersionSupport(opencodeVersion);
   checks.push({
     name: "OpenCode",
-    status: opencodeVersion.startsWith("2.0.") ? "PASS" : "DEGRADED",
-    detail: opencodeVersion,
+    status: support === "supported" ? "PASS" : "DEGRADED",
+    detail:
+      support === "supported"
+        ? `${opencodeVersion} — supported (${SUPPORTED_HOST_LINES.join(" / ")}.x)`
+        : support === "unknown"
+          ? `${opencodeVersion} — version not recognised; supported lines are ${SUPPORTED_HOST_LINES.join(" / ")}.x`
+          : `${opencodeVersion} — outside the supported lines (${SUPPORTED_HOST_LINES.join(" / ")}.x); the plugin may work but is not verified there`,
+  });
+
+  // 1b. Host API surface. The real compatibility signal is the API surface,
+  // not the version string: it reports the optional surfaces this host has.
+  const capabilities = describeHostCapabilities(runtime.ctx);
+  checks.push({
+    name: "Host API surface",
+    status: hostHasRequiredSurface(runtime.ctx) ? "PASS" : "FAIL",
+    detail: capabilities.join("; "),
   });
 
   // 2. Plugin/API version
-  checks.push({ name: "Plugin", status: "PASS", detail: PLUGIN_VERSION });
+  checks.push({ name: "Plugin", status: "PASS", detail: `${pluginVersion()} (SDK ${SUPPORTED_SDK_RANGE})` });
 
   // 2b. Autonomy policy (informational, always PASS)
   const autonomy = runtime.options.autonomy ?? { mode: "yolo" as const, askBefore: [] as string[] };
@@ -48,63 +72,49 @@ export async function runDoctor(runtime: LindoRuntime): Promise<DoctorReport> {
     status: "PASS",
     detail: autonomy.mode === "yolo"
       ? `yolo — external/destructive/production actions execute without asking${autonomy.askBefore.length > 0 ? `; askBefore: ${autonomy.askBefore.join("; ")}` : "; no guardrails registered"}`
-      : `guarded — external/destructive/outside-slice actions require approval${autonomy.askBefore.length > 0 ? `; askBefore: ${autonomy.askBefore.join("; ")}` : ""}`,
+      : `guarded — external/destructive/outside-delivery actions require approval${autonomy.askBefore.length > 0 ? `; askBefore: ${autonomy.askBefore.join("; ")}` : ""}`,
   });
 
-  // 3-4. Model catalog + variants. A missing pinned model is DEGRADED (not
-  // FAIL) when a same-family equivalent exists: doctor proposes an explicit
-  // remediation, never a silent fallback.
-  let remediation: ModelRemediation | undefined;
-  try {
-    const models = (await runtime.ctx.model.list()) as unknown as Array<{ providerID?: string; provider?: string; id?: string; modelID?: string }>;
-    const refOf = (m: { providerID?: string; provider?: string; id?: string; modelID?: string }): string => {
-      const p = String(m.providerID ?? m.provider ?? "");
-      const id = String((m as Record<string, unknown>)["id"] ?? (m as Record<string, unknown>)["modelID"] ?? "");
-      return `${p}/${id}`;
-    };
-    const found = models.some((m: any) => refOf(m) === `${MODEL_PROFILE.providerID}/${MODEL_PROFILE.modelID}`);
-    if (found) {
-      checks.push({
-        name: "Model",
-        status: "PASS",
-        detail: `${MODEL_PROFILE.providerID}/${MODEL_PROFILE.modelID}`,
-      });
-    } else {
-      const candidate = models.map(refOf).find((ref) => ref.includes(MODEL_PROFILE.modelID) && ref !== `${MODEL_PROFILE.providerID}/${MODEL_PROFILE.modelID}`);
-      if (candidate) {
-        remediation = {
-          from: `${MODEL_PROFILE.providerID}/${MODEL_PROFILE.modelID}`,
-          candidate,
-          instruction: `/lindo/setup --apply --remap-model '${candidate}'`,
-        };
-        checks.push({
-          name: "Model",
-          status: "DEGRADED",
-          detail: `pinned ${MODEL_PROFILE.providerID}/${MODEL_PROFILE.modelID} unavailable; equivalent ${candidate} found — confirm remediation: ${remediation.instruction}`,
-        });
-      } else {
-        checks.push({
-          name: "Model",
-          status: "FAIL",
-          detail: `${MODEL_PROFILE.providerID}/${MODEL_PROFILE.modelID} not in active catalog — connect via /connect then /models`,
-        });
-      }
-    }
-  } catch (err) {
-    checks.push({ name: "Model", status: "FAIL", detail: `catalog read failed: ${(err as Error).message}` });
+  // 3. Model resolution. The plugin pins no model: it verifies the harness can
+  // resolve one and that any user-configured reasoning effort exists in the
+  // active catalog. It never substitutes a model on its own.
+  const catalog = await readModelCatalog(runtime);
+  if (catalog.error) {
+    checks.push({ name: "Model catalog", status: "FAIL", detail: `catalog read failed: ${catalog.error}` });
+  } else if (catalog.models.length === 0) {
+    checks.push({ name: "Model catalog", status: "FAIL", detail: "no models in the active catalog — connect a provider, then rerun /agent-team/doctor" });
+  } else {
+    checks.push({
+      name: "Model catalog",
+      status: "PASS",
+      detail: `${catalog.models.length} model(s) available; Agent Team pins none and follows the harness default`,
+    });
   }
-  checks.push({
-    name: "Reasoning profile",
-    status: isSupportedVariant("max") ? "PASS" : "DEGRADED",
-    detail: `required: ${MODEL_PROFILE.requiredVariants.join(", ")} (preflight tests high/max separately)`,
-  });
 
-  // 5-7. Generation + tool call + structured output (no mutation)
+  const efforts = configuredReasoningEfforts(runtime.options);
+  if (efforts.length === 0) {
+    checks.push({ name: "Reasoning effort", status: "PASS", detail: "not configured — the harness default applies" });
+  } else if (catalog.error) {
+    checks.push({ name: "Reasoning effort", status: "DEGRADED", detail: `configured (${efforts.join(", ")}) but the catalog could not be read` });
+  } else {
+    const available = new Set<string>();
+    for (const m of catalog.models) for (const v of m.variants ?? []) available.add(v.id);
+    const missing = efforts.filter((e) => !available.has(e));
+    checks.push({
+      name: "Reasoning effort",
+      status: missing.length === 0 ? "PASS" : "FAIL",
+      detail: missing.length === 0
+        ? `configured efforts resolve in the active catalog (${efforts.join(", ")})`
+        : `configured effort(s) absent from the catalog: ${missing.join(", ")}`,
+    });
+  }
+
+  // 4. Generation with the harness default model (no mutation). The
+  // generator is resolved by feature detection: `ctx.experimental.generate.text`
+  // on 2.2.x, `ctx.generate.text` on 2.0.x/2.1.x.
   try {
-    const gen = await runtime.ctx.generate.text({
-      model: { providerID: MODEL_PROFILE.providerID, id: MODEL_PROFILE.modelID },
-      prompt: "Reply with exactly: doctor-ok",
-    } as never);
+    const generator = resolveTextGenerator(runtime.ctx);
+    const gen = await generator.text({ prompt: "Reply with exactly: doctor-ok" });
     const text = String((gen as unknown as { text?: string }).text ?? "");
     checks.push({ name: "Text generation", status: text.length > 0 ? "PASS" : "FAIL", detail: text.slice(0, 80) || "empty" });
   } catch (err) {
@@ -112,28 +122,28 @@ export async function runDoctor(runtime: LindoRuntime): Promise<DoctorReport> {
   }
   try {
     const tools = await runtime.ctx.tool.list();
-    const lindoTools = tools.filter((t) => t.id.startsWith("lindo_"));
-    checks.push({ name: "Tool registration", status: lindoTools.length >= 7 ? "PASS" : "FAIL", detail: `${lindoTools.length}/7 lindo_* tools` });
+    const agentTeamTools = tools.filter((t) => t.id.startsWith("agent_team_"));
+    checks.push({ name: "Tool registration", status: agentTeamTools.length >= 8 ? "PASS" : "FAIL", detail: `${agentTeamTools.length}/8 agent_team_* tools` });
   } catch (err) {
     checks.push({ name: "Tool registration", status: "FAIL", detail: (err as Error).message.slice(0, 200) });
   }
-  checks.push({ name: "Structured output", status: "PASS", detail: "closed JSON schemas (additionalProperties:false) on all lindo tools" });
+  checks.push({ name: "Structured output", status: "PASS", detail: "closed JSON schemas (additionalProperties:false) on all agent-team tools" });
 
-  // 8. Specialists discoverable (agent list)
+  // 5. Specialists discoverable (agent list)
   try {
     const agents = (await runtime.ctx.agent.list()) as unknown as Array<{ id?: string; name?: string }>;
     const ids = agents.map((a) => String(a.id ?? a.name ?? ""));
-    const hasLindo = ids.includes("lindo");
-    checks.push({ name: "Native specialists", status: hasLindo ? "PASS" : "DEGRADED", detail: hasLindo ? "lindo discovered (run /lindo/setup for full roster)" : "lindo not materialized yet — run /lindo/setup --apply" });
+    const hasTeamLeader = ids.includes("team-leader");
+    checks.push({ name: "Native specialists", status: hasTeamLeader ? "PASS" : "DEGRADED", detail: hasTeamLeader ? "team-leader discovered (run /agent-team/setup for full roster)" : "team-leader not materialized yet — run /agent-team/setup --apply" });
   } catch (err) {
     checks.push({ name: "Native specialists", status: "FAIL", detail: (err as Error).message.slice(0, 200) });
   }
 
-  // 9. Storage
+  // 6. Storage
   try {
-    await runtime.ctx.storage.set("lindo/doctor", { at: new Date().toISOString() } as never);
-    await runtime.ctx.storage.get("lindo/doctor");
-    await runtime.ctx.storage.remove("lindo/doctor");
+    await runtime.ctx.storage.set("agent-team/doctor", { at: new Date().toISOString() } as never);
+    await runtime.ctx.storage.get("agent-team/doctor");
+    await runtime.ctx.storage.remove("agent-team/doctor");
     checks.push({ name: "Ledger", status: "PASS", detail: "storage write/read/remove ok" });
   } catch (err) {
     checks.push({ name: "Ledger", status: "FAIL", detail: (err as Error).message.slice(0, 200) });
@@ -145,30 +155,44 @@ export async function runDoctor(runtime: LindoRuntime): Promise<DoctorReport> {
   return {
     verdict,
     checks,
-    recommendedAction: verdict === "PASS" ? "Ready. Start with /lindo/start." : "Resolve FAIL lines above; DEGRADED reasoning means use high/xhigh and rerun max preflight after provider update.",
+    recommendedAction:
+      verdict === "PASS"
+        ? "Ready. Start with /agent-team/start."
+        : "Resolve FAIL lines above; Agent Team never substitutes a model on its own — fix the provider, the catalog or your configuration.",
     opencodeVersion,
-    pluginVersion: PLUGIN_VERSION,
-    ...(remediation ? { remediation } : {}),
+    pluginVersion: pluginVersion(),
   };
 }
 
+interface CatalogModel {
+  id: string;
+  providerID: string;
+  variants: Array<{ id: string }>;
+}
+
+async function readModelCatalog(runtime: AgentTeamRuntime): Promise<{ models: CatalogModel[]; error?: string }> {
+  try {
+    const raw = (await runtime.ctx.model.list()) as unknown as Array<Record<string, unknown>>;
+    const models = raw.map((m) => ({
+      id: String(m["id"] ?? m["modelID"] ?? ""),
+      providerID: String(m["providerID"] ?? m["provider"] ?? ""),
+      variants: Array.isArray(m["variants"]) ? (m["variants"] as Array<{ id?: string }>).map((v) => ({ id: String(v?.id ?? "") })) : [],
+    }));
+    return { models };
+  } catch (err) {
+    return { models: [], error: (err as Error).message };
+  }
+}
+
 export function renderDoctorReport(report: DoctorReport): string {
+  const header = new Set(["OpenCode", "Plugin"]);
   const lines = [
-    `Lindo Doctor — ${report.verdict}`,
+    `Agent Team Doctor — ${report.verdict}`,
     ``,
     `OpenCode: ${report.checks.find((c) => c.name === "OpenCode")?.status} (${report.opencodeVersion})`,
     `Plugin: ${report.checks.find((c) => c.name === "Plugin")?.status} (${report.pluginVersion})`,
-    ...report.checks.slice(2).map((c) => `${c.name}: ${c.status} (${c.detail.slice(0, 160)})`),
+    ...report.checks.filter((c) => !header.has(c.name)).map((c) => `${c.name}: ${c.status} (${c.detail.slice(0, 160)})`),
     ``,
-    ...(report.remediation
-      ? [
-          `Model remediation (explicit confirmation required, never automatic):`,
-          `  pinned missing: ${report.remediation.from}`,
-          `  working equivalent: ${report.remediation.candidate}`,
-          `  apply with: ${report.remediation.instruction}`,
-          ``,
-        ]
-      : []),
     `Recommended action: ${report.recommendedAction}`,
   ];
   return lines.join("\n");

@@ -1,7 +1,8 @@
 import { ApprovalInputSchema } from "../domain/schemas.js";
-import { appendEvent, readState, storeContext } from "../ledger/store.js";
+import { appendEvent  } from "../ledger/store.js";
 import { approvalId } from "../util/ids.js";
-import { projectRootOf, toolOk, type LindoRuntime } from "../runtime.js";
+import { toolOk, type AgentTeamRuntime } from "../runtime.js";
+import { openLedger } from "./ledger.js";
 import type { ToolContext } from "@opencode/plugin/promise/tool";
 
 export const APPROVAL_TOOL = {
@@ -28,17 +29,11 @@ export const APPROVAL_TOOL = {
   },
 } as const;
 
-export async function executeApproval(runtime: LindoRuntime, rawInput: unknown, tool: ToolContext): Promise<{ content: string }> {
+export async function executeApproval(runtime: AgentTeamRuntime, rawInput: unknown, tool: ToolContext): Promise<{ content: string }> {
   const parsed = ApprovalInputSchema.safeParse(rawInput);
   if (!parsed.success) throw new Error(`invalid approval input: ${parsed.error.message}`);
   const input = parsed.data;
-  const projectRoot = projectRootOf(runtime.ctx);
-  const current = await readState(projectRoot);
-  if (!current) throw new Error("lindo state not initialized");
-  if (input.expectedRevision !== current.revision) throw new Error(`stale revision: expected ${input.expectedRevision}, actual ${current.revision}`);
-  const sessionId = String((tool as unknown as { sessionID?: string }).sessionID ?? "unknown");
-  const agent = String((tool as unknown as { agent?: string }).agent ?? "lindo");
-  const ctx = storeContext(projectRoot, sessionId, agent);
+  const { projectRoot, current, ctx } = await openLedger(runtime, tool, input.expectedRevision, "open or resolve an approval");
 
   if (input.action === "open") {
     const id = approvalId(current.approvals.length + 1);

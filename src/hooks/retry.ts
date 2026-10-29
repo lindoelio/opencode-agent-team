@@ -1,10 +1,10 @@
-import type { LindoRuntime } from "../runtime.js";
+import type { AgentTeamRuntime } from "../runtime.js";
 
 /**
  * session.retry: bounded retries for transient failures only.
  * Never auto-retry permissions, deterministic validation failures, or invalid requests.
  */
-export async function registerRetryHook(runtime: LindoRuntime): Promise<{ dispose: () => Promise<void> }> {
+export async function registerRetryHook(runtime: AgentTeamRuntime): Promise<{ dispose: () => Promise<void> }> {
   const reg = await runtime.ctx.session.hook("retry", async (event: any) => {
     const err = event.error as { type?: string; status?: number; message?: string };
     const msg = `${err.type ?? ""} ${err.message ?? ""}`.toLowerCase();

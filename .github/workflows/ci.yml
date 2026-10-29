@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly: score the method against a real model on the cheap cases.
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck, Coverage, Bench & Pack
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify (typecheck + coverage + bench + pack)
+        run: npm run verify
+
+  sdk-matrix:
+    name: SDK ${{ matrix.sdk }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The three OpenCode host lines the plugin supports.
+        sdk: ["2.0.10", "2.1.4", "2.2.0"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and test against this SDK
+        # The SDK is swapped into the tree rather than resolved fresh: a
+        # fresh resolve drags in the whole provider-SDK tree, which is not
+        # always installable and has nothing to do with this plugin.
+        run: npx tsx scripts/compat-check.ts ${{ matrix.sdk }}
+
+  bench-model:
+    name: AgentTeamBench (real model)
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install the OpenCode CLI
+        run: npm install --no-save opencode-ai
+
+      - name: Score the method against a real model
+        env:
+          AGENT_TEAM_BENCH: "1"
+          AGENT_TEAM_BENCH_MODEL: ${{ vars.AGENT_TEAM_BENCH_MODEL }}
+        run: npm run bench:model
+
+      - name: Publish the scores
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-team-bench-scores
+          path: bench-scores.json
+          if-no-files-found: ignore

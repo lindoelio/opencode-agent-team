@@ -22,11 +22,11 @@ describe("authority matrix (yolo default)", () => {
     expect(classifyAuthority({ action: "read", resource: ".env" }).effect).toBe("ALLOW");
     expect(classifyAuthority({ action: "read", resource: "src/index.ts" }).effect).toBe("ALLOW");
   });
-  it("scopes subagents: built-ins allowed for everyone, lindo/* only by lindo", () => {
-    expect(classifyAuthority({ action: "subagent", resource: "general", role: "lindo/builder" }).effect).toBe("ALLOW");
-    expect(classifyAuthority({ action: "subagent", resource: "explore", role: "lindo/explorer" }).effect).toBe("ALLOW");
-    expect(classifyAuthority({ action: "subagent", resource: "lindo/builder", role: "lindo" }).effect).toBe("ALLOW");
-    expect(classifyAuthority({ action: "subagent", resource: "lindo/builder", role: "lindo/builder" }).effect).toBe("DENY");
+  it("scopes subagents: built-ins allowed for everyone, team-leader/* only by team-leader", () => {
+    expect(classifyAuthority({ action: "subagent", resource: "general", role: "team-leader/coder" }).effect).toBe("ALLOW");
+    expect(classifyAuthority({ action: "subagent", resource: "explore", role: "team-leader/explorer" }).effect).toBe("ALLOW");
+    expect(classifyAuthority({ action: "subagent", resource: "team-leader/coder", role: "team-leader" }).effect).toBe("ALLOW");
+    expect(classifyAuthority({ action: "subagent", resource: "team-leader/coder", role: "team-leader/coder" }).effect).toBe("DENY");
   });
   it("guarded mode restores ask-before-external behavior (opt-in)", () => {
     expect(classifyGuarded({ action: "git-push" }).effect).toBe("ASK");

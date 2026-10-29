@@ -8,23 +8,25 @@ import { verifyChain } from "../../src/ledger/events.js";
 
 /**
  * VS-001 (deterministic, model-free): clean install -> intent -> decision ->
- * slice -> builder -> tests -> verifier -> ACCEPT gate. Proves the ledger,
- * gate engine, and restart persistence without spending model budget.
- * Real-model E2E remains opt-in under LINDO_E2E=1.
+ * delivery -> execution -> tests -> ACCEPT gate. Proves the ledger, the gate
+ * engine and restart persistence without spending model budget. The
+ * independent-review requirement is exercised by the tool tests in
+ * tools.test.ts, which drive a real reviewer handoff; real-model E2E remains
+ * opt-in under AGENT_TEAM_E2E=1.
  */
-describe("VS-001 deterministic slice loop", () => {
+describe("VS-001 deterministic delivery loop", () => {
   it("goes from intent to ACCEPT PASS with criterion-linked evidence", async () => {
-    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "lindo-vs001-"));
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-vs001-"));
     const s0 = await initializeState({
       projectRoot: root,
       sessionId: "s-vs001",
-      actor: "lindo",
+      actor: "team-leader",
       outcome: "Archive tasks and filter Active/Archived",
       actors: ["board user"],
       acceptance: ["AC-001", "AC-002"],
     });
     expect(s0.engagement.phase).toBe("INTENT");
-    const ctx = storeContext(root, "s-vs001", "lindo");
+    const ctx = storeContext(root, "s-vs001", "team-leader");
 
     // DECIDE
     const s1 = await appendEvent(ctx, "decision.recorded", { id: "DEC-0001" }, (s) => ({
@@ -41,23 +43,23 @@ describe("VS-001 deterministic slice loop", () => {
       }],
     }));
 
-    // SLICE (single active slice with real-path validation + rollback)
-    const s2 = await appendEvent(ctx, "slice.defined", { id: "SLICE-001" }, (s) => ({
+    // PLAN (single active delivery with real-path validation + rollback)
+    const s2 = await appendEvent(ctx, "delivery.defined", { id: "DEL-001" }, (s) => ({
       ...s,
-      engagement: { ...s.engagement, phase: "IMPLEMENT" as const, status: "IN_PROGRESS" as const },
-      activeSlice: {
-        id: "SLICE-001", title: "Archive + Active/Archived filter", userOutcome: "user archives and filters tasks",
+      engagement: { ...s.engagement, phase: "EXECUTE" as const, status: "IN_PROGRESS" as const },
+      activeDelivery: {
+        id: "DEL-001", title: "Archive + Active/Archived filter", userOutcome: "user archives and filters tasks",
         entryState: "board without archive", happyPath: ["add task", "archive task", "filter active", "filter archived"],
-        inScope: ["src/board.ts"], outOfScope: ["auth", "db", "deploy"], allowedFiles: ["src/board.ts"],
-        prohibitedFiles: ["src/auth.ts"], acceptanceCriteria: ["AC-001", "AC-002"],
-        validationCommands: ["npm test"], runtimeProof: ["board flow test"], visualProof: [],
-        risks: ["none"], rollback: "revert src/board.ts", owner: "lindo", status: "IN_PROGRESS",
+        inScope: ["src/board.ts"], outOfScope: ["auth", "db", "deploy"], allowedScope: ["src/board.ts"],
+        prohibitedScope: ["src/auth.ts"], acceptanceCriteria: ["AC-001", "AC-002"],
+        validationSteps: ["npm test"], proof: [{ kind: "functional", claim: "board flow test", ref: "board flow test" }],
+        risks: ["none"], rollback: "revert src/board.ts", owner: "team-leader", status: "IN_PROGRESS",
       },
-      nextAction: { description: "Implement SLICE-001", owner: "lindo/builder" },
+      nextAction: { description: "Execute DEL-001", owner: "team-leader/coder" },
     }));
-    expect(s2.activeSlice?.id).toBe("SLICE-001");
+    expect(s2.activeDelivery?.id).toBe("DEL-001");
 
-    // BUILD + VERIFY: criterion-linked evidence (command digest present)
+    // EXECUTE + VERIFY: criterion-linked evidence (command digest present)
     const s3 = await appendEvent(ctx, "evidence.submitted", { id: "EVD-0001" }, (s) => ({
       ...s,
       engagement: { ...s.engagement, phase: "VERIFY" as const, status: "VERIFYING" as const },
@@ -68,9 +70,9 @@ describe("VS-001 deterministic slice loop", () => {
       evidence: [...s.evidence, { id: "EVD-0002", criterionId: "AC-002", kind: "test" as const, status: "pass" as const, summary: "archived filter returns only archived", command: "npm test", digest: "def456", observedAt: new Date().toISOString(), limitations: [] }],
     }));
 
-    // REVIEW (independent verifier, no critical findings) + ACCEPT
+    // REVIEW (independent reviewer, no critical findings) + ACCEPT
     const gate = evaluateAcceptGate({
-      criteria: s4.activeSlice?.acceptanceCriteria ?? [],
+      criteria: s4.activeDelivery?.acceptanceCriteria ?? [],
       evidence: s4.evidence,
       findings: [{ severity: "note" }],
     });
@@ -78,15 +80,15 @@ describe("VS-001 deterministic slice loop", () => {
     const s5 = await appendEvent(ctx, "gate.evaluated", { gate: "ACCEPT", result: gate.result }, (s) => ({
       ...s,
       engagement: { ...s.engagement, phase: "ACCEPT" as const, status: "ACCEPTED" as const },
-      gates: [...s.gates, { gate: "ACCEPT" as const, result: gate.result, claim: "SLICE-001 done", satisfied: gate.satisfied, missing: gate.missing, failed: gate.failed, waivers: gate.waivers, nextAction: gate.nextAction, evaluatedAt: new Date().toISOString() }],
-      nextAction: { description: "Release readiness per contract", owner: "lindo/release" },
+      gates: [...s.gates, { gate: "ACCEPT" as const, result: gate.result, claim: "DEL-001 done", satisfied: gate.satisfied, missing: gate.missing, failed: gate.failed, waivers: gate.waivers, nextAction: gate.nextAction, evaluatedAt: new Date().toISOString() }],
+      nextAction: { description: "Delivery readiness per contract", owner: "team-leader/release" },
     }));
 
     // Restart persistence: reread + chain verify
     const reread = await readState(root);
     expect(reread?.engagement.status).toBe("ACCEPTED");
     expect(reread?.decisions.map((d) => d.id)).toContain("DEC-0001");
-    expect(reread?.nextAction.owner).toBe("lindo/release");
+    expect(reread?.nextAction.owner).toBe("team-leader/release");
     expect(verifyChain(await readEvents(root)).ok).toBe(true);
     expect(s5.revision).toBeGreaterThan(s1.revision);
   });

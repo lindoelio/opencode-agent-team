@@ -11,7 +11,7 @@ describe("event hash chain", () => {
       projectId: "PRJ-X",
       engagementId: "ENG-X",
       sessionIdHash: "abc",
-      actor: "lindo",
+      actor: "agent-team",
       type: "engagement.initialized",
       payload: { a: 1 },
       previousHash: GENESIS_HASH,

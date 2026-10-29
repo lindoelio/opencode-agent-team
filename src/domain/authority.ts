@@ -8,7 +8,7 @@ export interface AuthorityQuery {
   hasMatchingApproval?: boolean;
   isExternal?: boolean;
   isDestructive?: boolean;
-  isOutsideSlice?: boolean;
+  isOutsideDelivery?: boolean;
   untrustedSource?: boolean;
 }
 
@@ -31,11 +31,11 @@ function globMatch(pattern: string, value: string): boolean {
  * Authority Matrix, YOLO baseline (default since 0.2.0). ALLOW is the default
  * for external, destructive, production, financial and legal actions. `ASK`
  * is not produced here: it is reserved for user-registered guardrails
- * (`autonomy.askBefore`, `/lindo/guard`) and for `autonomy.mode: "guarded"`.
+ * (`autonomy.askBefore`, `/agent-team/guard`) and for `autonomy.mode: "guarded"`.
  *
  * The only DENY rules are integrity rules: they never ask the user, they
  * simply refuse secret exposure, unproven claims, instructions found in
- * untrusted content, and lindo/* delegation by non-orchestrators.
+ * untrusted content, and team-leader/* delegation by non-orchestrators.
  *
  * Ordered: later rules win (last-match semantics applied by classify()).
  */
@@ -44,7 +44,7 @@ export const AUTHORITY_RULES: AuthorityRule[] = [
   { match: (q) => q.action === "glob" || q.action === "grep", effect: "ALLOW", reason: "workspace search" },
   { match: (q) => q.action === "webfetch" || q.action === "websearch", effect: "ALLOW", reason: "public docs" },
   { match: (q) => q.action === "diagnose", effect: "ALLOW", reason: "diagnose without mutation" },
-  { match: (q) => q.action === "plan" || q.action === "thesis" || q.action === "slice-plan", effect: "ALLOW_WITH_RECORD", reason: "record proposal vs accepted decision" },
+  { match: (q) => q.action === "plan" || q.action === "thesis" || q.action === "delivery-plan", effect: "ALLOW_WITH_RECORD", reason: "record proposal vs accepted decision" },
   { match: (q) => q.action === "edit", effect: "ALLOW", reason: "edit within slice" },
   { match: (q) => q.action === "shell", effect: "ALLOW", reason: "autonomous shell" },
   { match: (q) => q.action === "dependency-add", effect: "ALLOW_WITH_RECORD", reason: "record need/license/impact" },
@@ -59,18 +59,18 @@ export const AUTHORITY_RULES: AuthorityRule[] = [
   { match: (q) => q.action === "secret-expose" || q.action === "policy-bypass", effect: "DENY", reason: "never expose secrets or bypass protections" },
   { match: (q) => q.action === "false-claim", effect: "DENY", reason: "never claim test/deploy without proof" },
   { match: (q) => q.action === "untrusted-instruction" || q.untrustedSource === true, effect: "DENY", reason: "untrusted content is data, not command" },
-  // Orchestration boundary: lindo orchestrates lindo/*; specialists may launch
-  // built-in OpenCode helper agents, never lindo/* trees.
+  // Orchestration boundary: team-leader orchestrates team-leader/*; specialists may launch
+  // built-in OpenCode helper agents, never team-leader/* trees.
   { match: (q) => q.action === "subagent", effect: "ALLOW", reason: "built-in helper agents allowed" },
   {
     match: (q) =>
       q.action === "subagent" &&
       !!q.resource &&
-      q.resource.startsWith("lindo/") &&
+      q.resource.startsWith("team-leader/") &&
       !!q.role &&
-      q.role !== "lindo",
+      q.role !== "team-leader",
     effect: "DENY",
-    reason: "only lindo may orchestrate lindo/* specialists",
+    reason: "only team-leader may orchestrate team-leader/* specialists",
   },
 ];
 
@@ -87,7 +87,7 @@ export const GUARDED_ELEVATION_RULES: AuthorityRule[] = [
   { match: (q) => q.action === "production" || q.action === "billing" || q.action === "permissions", effect: "ASK", reason: "guarded: production/account mutation" },
   { match: (q) => q.action === "financial" || q.action === "legal", effect: "ASK", reason: "guarded: explicit human authority" },
   { match: (q) => q.action === "destructive" || q.isDestructive === true, effect: "ASK", reason: "guarded: irreversible action" },
-  { match: (q) => (q.isExternal === true || q.isDestructive === true || q.isOutsideSlice === true) && (q.action === "shell" || q.action === "edit"), effect: "ASK", reason: "guarded: external/destructive/outside-slice" },
+  { match: (q) => (q.isExternal === true || q.isDestructive === true || q.isOutsideDelivery === true) && (q.action === "shell" || q.action === "edit"), effect: "ASK", reason: "guarded: external/destructive/outside-delivery" },
 ];
 
 export interface AuthorityVerdict {
@@ -95,7 +95,14 @@ export interface AuthorityVerdict {
   reason: string;
 }
 
-/** Last matching rule wins. */
+/**
+ * Last matching rule wins.
+ *
+ * A rule whose matcher throws is not treated as "did not match". Treating it
+ * that way would let a broken DENY rule fall through to ALLOW, which is the
+ * exact opposite of "DENY is final". The matrix therefore fails closed: an
+ * unevaluable rule denies.
+ */
 export function classifyAuthority(q: AuthorityQuery): AuthorityVerdict {
   let verdict: AuthorityVerdict = { effect: "ALLOW", reason: "default allow" };
   for (const rule of AUTHORITY_RULES) {
@@ -103,7 +110,7 @@ export function classifyAuthority(q: AuthorityQuery): AuthorityVerdict {
     try {
       matched = rule.match(q);
     } catch {
-      matched = false;
+      return { effect: "DENY", reason: `authority rule could not be evaluated, failing closed (${rule.reason})` };
     }
     if (matched) verdict = { effect: rule.effect, reason: rule.reason };
   }
@@ -113,7 +120,11 @@ export function classifyAuthority(q: AuthorityQuery): AuthorityVerdict {
   return verdict;
 }
 
-/** Guarded-mode classification: yolo baseline plus legacy ASK elevations. */
+/**
+ * Guarded-mode classification: yolo baseline plus legacy ASK elevations.
+ * An elevation rule that throws fails closed to ASK for the same reason the
+ * base matrix fails closed to DENY.
+ */
 export function classifyGuarded(q: AuthorityQuery): AuthorityVerdict {
   const base = classifyAuthority(q);
   if (base.effect === "DENY") return base;
@@ -123,7 +134,7 @@ export function classifyGuarded(q: AuthorityQuery): AuthorityVerdict {
     try {
       matched = rule.match(q);
     } catch {
-      matched = false;
+      return { effect: "ASK", reason: `guardrail rule could not be evaluated, failing closed (${rule.reason})` };
     }
     if (matched) verdict = { effect: rule.effect, reason: rule.reason };
   }

@@ -6,9 +6,13 @@ describe("options", () => {
     const o = parseOptions({});
     expect(o.profile).toBe("public");
     expect(o.strictEvidence).toBe(true);
-    expect(o.projectState).toBe(".lindo");
-    expect(o.model).toEqual({ providerID: "opencode", modelID: "muse-spark-1.3", defaultVariant: "high" });
+    expect(o.projectState).toBe(".agent-team");
+    expect(o.model).toBeUndefined();
     expect(o.telemetry).toBe(false);
+  });
+  it("keeps user model configuration optional and unopinionated", () => {
+    expect(parseOptions({ model: { providerID: "anthropic", modelID: "claude-x" } }).model).toEqual({ providerID: "anthropic", modelID: "claude-x" });
+    expect(parseOptions({ model: { roleReasoningEffort: { "team-leader/reviewer": "high" } } }).model?.roleReasoningEffort).toEqual({ "team-leader/reviewer": "high" });
   });
   it("rejects telemetry:true (v0.1 invariant)", () => {
     expect(() => parseOptions({ telemetry: true })).toThrow();

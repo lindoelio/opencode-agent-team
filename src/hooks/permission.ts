@@ -1,6 +1,6 @@
 import { approvalSatisfies, classifyAuthority, classifyGuarded, matchesGuardrail } from "../domain/authority.js";
 import { readState } from "../ledger/store.js";
-import { projectRootOf, type LindoRuntime } from "../runtime.js";
+import { projectRootOf, type AgentTeamRuntime } from "../runtime.js";
 
 /**
  * permission.evaluate: YOLO by default.
@@ -8,12 +8,12 @@ import { projectRootOf, type LindoRuntime } from "../runtime.js";
  * - ALLOW is the baseline, including external, destructive, production,
  *   financial and legal actions. The hook does not elevate allow -> ask.
  * - ASK is produced only by (a) user-registered guardrails
- *   (`autonomy.askBefore`, `/lindo/guard`) or (b) `autonomy.mode: "guarded"`
+ *   (`autonomy.askBefore`, `/agent-team/guard`) or (b) `autonomy.mode: "guarded"`
  *   (legacy opt-in behavior). State-level settings override plugin options.
  * - DENY integrity rules are final and are never weakened.
  * - A previously asked action is allowed only with an exact, current approval.
  */
-export async function registerPermissionHook(runtime: LindoRuntime): Promise<{ dispose: () => Promise<void> }> {
+export async function registerPermissionHook(runtime: AgentTeamRuntime): Promise<{ dispose: () => Promise<void> }> {
   const reg = await runtime.ctx.permission.hook("evaluate", async (event: any) => {
     const action = String(event.action ?? "");
     const resources = [...(event.resources ?? [])];
@@ -22,7 +22,7 @@ export async function registerPermissionHook(runtime: LindoRuntime): Promise<{ d
 
     const isExternal = /push|pull request|pr\b|publish|deploy|tag |http|external|mcp|webhook/i.test(`${action} ${resourceText}`);
     const isDestructive = /delete|destroy|drop|rm\s+-rf|production|billing|permission|destructive/i.test(`${action} ${resourceText}`);
-    const isOutsideSlice = /outside|out-of-scope|\.\.\//i.test(resourceText);
+    const isOutsideDelivery = /outside|out-of-scope|\.\.\//i.test(resourceText);
 
     // Effective autonomy: state overrides plugin options.
     let mode = runtime.options.autonomy?.mode ?? "yolo";
@@ -38,12 +38,12 @@ export async function registerPermissionHook(runtime: LindoRuntime): Promise<{ d
       // storage failure: fall back to option-level configuration
     }
 
-    const query = { action, resource: resources[0], role: agent, isExternal, isDestructive, isOutsideSlice };
+    const query = { action, resource: resources[0], role: agent, isExternal, isDestructive, isOutsideDelivery };
     const verdict = mode === "guarded" ? classifyGuarded(query) : classifyAuthority(query);
 
     if (verdict.effect === "DENY") {
       event.effect = "deny";
-      event.message = `Lindo DENY: ${verdict.reason}`;
+      event.message = `Agent Team DENY: ${verdict.reason}`;
       return;
     }
 
@@ -51,10 +51,10 @@ export async function registerPermissionHook(runtime: LindoRuntime): Promise<{ d
     const matched = matchesGuardrail(guardrails, action, resources);
     if (matched && event.effect === "allow") {
       event.effect = "ask";
-      event.message = `Lindo ASK (guardrail "${matched}"): ${`${action} ${resourceText}`.trim()}`;
+      event.message = `Agent Team ASK (guardrail "${matched}"): ${`${action} ${resourceText}`.trim()}`;
     } else if (verdict.effect === "ASK" && event.effect === "allow") {
       event.effect = "ask";
-      event.message = `Lindo ASK: ${verdict.reason}`;
+      event.message = `Agent Team ASK: ${verdict.reason}`;
     }
 
     // A previous ask may be satisfied by an exact matching approval.
@@ -69,13 +69,13 @@ export async function registerPermissionHook(runtime: LindoRuntime): Promise<{ d
         );
         if (match) {
           event.effect = "allow";
-          event.message = `Lindo approval ${match.id} matched scope`;
+          event.message = `Agent Team approval ${match.id} matched scope`;
           return;
         }
       } catch {
         // storage failure: fail closed, keep ask
       }
-      if (!event.message) event.message = "Lindo: explicit authorization required";
+      if (!event.message) event.message = "Agent Team: explicit authorization required";
     }
   });
   return { dispose: () => reg.dispose() };

@@ -1,20 +1,20 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-export const LINDO_DIR_NAME = ".lindo";
+export const AGENT_TEAM_DIR_NAME = ".agent-team";
 export const STATE_FILE = "state.json";
 export const EVENTS_FILE = "ledger/events.jsonl";
 
-export function lindoDir(projectRoot: string): string {
-  return path.join(projectRoot, LINDO_DIR_NAME);
+export function agentTeamDir(projectRoot: string): string {
+  return path.join(projectRoot, AGENT_TEAM_DIR_NAME);
 }
 
 export function statePath(projectRoot: string): string {
-  return path.join(lindoDir(projectRoot), STATE_FILE);
+  return path.join(agentTeamDir(projectRoot), STATE_FILE);
 }
 
 export function eventsPath(projectRoot: string): string {
-  return path.join(lindoDir(projectRoot), EVENTS_FILE);
+  return path.join(agentTeamDir(projectRoot), EVENTS_FILE);
 }
 
 /** Normalize and refuse traversal outside projectRoot. Returns absolute path. */
@@ -64,10 +64,10 @@ export async function assertNoSymlinkEscape(projectRoot: string, targetAbs: stri
   return targetAbs;
 }
 
-export function isLindoManagedAgentPath(rel: string): boolean {
+export function isAgentTeamManagedAgentPath(rel: string): boolean {
   return (
-    rel === ".opencode/agents/lindo.md" ||
-    rel.startsWith(".opencode/agents/lindo/") ||
-    rel === ".lindo/README.md"
+    rel === ".opencode/agents/team-leader.md" ||
+    rel.startsWith(".opencode/agents/team-leader/") ||
+    rel === ".agent-team/README.md"
   );
 }

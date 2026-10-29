@@ -9,15 +9,16 @@ export interface AgentTemplate {
 }
 
 export const AGENT_TEMPLATES: AgentTemplate[] = [
-  { id: "lindo", targetRel: ".opencode/agents/lindo.md", sourceRel: "assets/agents/lindo.md" },
-  { id: "lindo/explorer", targetRel: ".opencode/agents/lindo/explorer.md", sourceRel: "assets/agents/lindo/explorer.md" },
-  { id: "lindo/product", targetRel: ".opencode/agents/lindo/product.md", sourceRel: "assets/agents/lindo/product.md" },
-  { id: "lindo/architect", targetRel: ".opencode/agents/lindo/architect.md", sourceRel: "assets/agents/lindo/architect.md" },
-  { id: "lindo/designer", targetRel: ".opencode/agents/lindo/designer.md", sourceRel: "assets/agents/lindo/designer.md" },
-  { id: "lindo/builder", targetRel: ".opencode/agents/lindo/builder.md", sourceRel: "assets/agents/lindo/builder.md" },
-  { id: "lindo/verifier", targetRel: ".opencode/agents/lindo/verifier.md", sourceRel: "assets/agents/lindo/verifier.md" },
-  { id: "lindo/security", targetRel: ".opencode/agents/lindo/security.md", sourceRel: "assets/agents/lindo/security.md" },
-  { id: "lindo/release", targetRel: ".opencode/agents/lindo/release.md", sourceRel: "assets/agents/lindo/release.md" },
+  { id: "team-leader", targetRel: ".opencode/agents/team-leader.md", sourceRel: "assets/agents/team-leader.md" },
+  { id: "team-leader/explorer", targetRel: ".opencode/agents/team-leader/explorer.md", sourceRel: "assets/agents/team-leader/explorer.md" },
+  { id: "team-leader/product", targetRel: ".opencode/agents/team-leader/product.md", sourceRel: "assets/agents/team-leader/product.md" },
+  { id: "team-leader/architect", targetRel: ".opencode/agents/team-leader/architect.md", sourceRel: "assets/agents/team-leader/architect.md" },
+  { id: "team-leader/designer", targetRel: ".opencode/agents/team-leader/designer.md", sourceRel: "assets/agents/team-leader/designer.md" },
+  { id: "team-leader/coder", targetRel: ".opencode/agents/team-leader/coder.md", sourceRel: "assets/agents/team-leader/coder.md" },
+  { id: "team-leader/worker", targetRel: ".opencode/agents/team-leader/worker.md", sourceRel: "assets/agents/team-leader/worker.md" },
+  { id: "team-leader/reviewer", targetRel: ".opencode/agents/team-leader/reviewer.md", sourceRel: "assets/agents/team-leader/reviewer.md" },
+  { id: "team-leader/security", targetRel: ".opencode/agents/team-leader/security.md", sourceRel: "assets/agents/team-leader/security.md" },
+  { id: "team-leader/release", targetRel: ".opencode/agents/team-leader/release.md", sourceRel: "assets/agents/team-leader/release.md" },
 ];
 
 export function packageRoot(): string {
@@ -34,13 +35,13 @@ export async function loadTemplates(): Promise<Map<string, string>> {
     const content = await fs.promises.readFile(abs, "utf8");
     out.set(t.targetRel, content);
   }
-  // .lindo/README template
-  const readme = path.join(root, "assets", "templates", "lindo-readme.md");
+  // .agent-team/README template
+  const readme = path.join(root, "assets", "templates", "agent-team-readme.md");
   try {
     const content = await fs.promises.readFile(readme, "utf8");
-    out.set(".lindo/README.md", content);
+    out.set(".agent-team/README.md", content);
   } catch {
-    out.set(".lindo/README.md", "# .lindo\n\nLindo project ledger. Machine-managed; edit via /lindo commands and tools.\n");
+    out.set(".agent-team/README.md", "# .agent-team\n\nAgent Team project ledger. Machine-managed; edit via /agent-team commands and tools.\n");
   }
   return out;
 }

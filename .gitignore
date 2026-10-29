@@ -1,7 +1,9 @@
 node_modules/
 dist/
 *.tgz
-.lindo/
+.agent-team/
 .opencode/
 .DS_Store
 coverage/
+bench-scores.json
+.specs/

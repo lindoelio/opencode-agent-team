@@ -1,25 +1,25 @@
 {
-  "name": "@lindoelio/opencode-lindo",
-  "version": "0.2.0",
-  "description": "Lindo Method: an evidence-driven autonomous tech lead for OpenCode",
+  "name": "@lindoelio/opencode-agent-team",
+  "version": "0.4.0",
+  "description": "Agent Team Method: an evidence-driven autonomous operating system for OpenCode \u2014 one accountable team leader, nine specialists, deterministic evidence gates",
   "license": "MIT",
-  "author": "Lindoélio Lázaro <lindoelio@gmail.com>",
+  "author": "Lindo\u00e9lio L\u00e1zaro <lindoelio@gmail.com>",
   "keywords": [
     "opencode",
     "plugin",
-    "tech-lead",
     "autonomous-agent",
     "evidence",
-    "vertical-slice",
-    "decision-log"
+    "delivery",
+    "decision-log",
+    "orchestration"
   ],
-  "homepage": "https://github.com/lindoelio/opencode-lindo#readme",
+  "homepage": "https://github.com/lindoelio/opencode-agent-team#readme",
   "bugs": {
-    "url": "https://github.com/lindoelio/opencode-lindo/issues"
+    "url": "https://github.com/lindoelio/opencode-agent-team/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lindoelio/opencode-lindo.git"
+    "url": "git+https://github.com/lindoelio/opencode-agent-team.git"
   },
   "type": "module",
   "exports": {
@@ -31,14 +31,13 @@
     "schemas",
     "README.md",
     "LICENSE",
-    "SECURITY.md",
     "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=22"
   },
   "dependencies": {
-    "@opencode/plugin": "2.0.10",
+    "@opencode/plugin": ">=2.0.10 <2.3.0",
     "jsonc-parser": "^3.3.1",
     "zod": "^4.1.8"
   },
@@ -51,11 +50,19 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:unit": "vitest run test/unit",
+    "test:integration": "vitest run test/integration",
+    "test:security": "vitest run test/security",
+    "test:snapshots": "vitest run test/snapshots",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
-    "test:e2e": "vitest run test/e2e",
+    "test:e2e": "AGENT_TEAM_E2E=1 vitest run test/e2e --testTimeout=1500000 --no-file-parallelism",
     "bench": "node --experimental-strip-types bench/runners/run.ts 2>/dev/null || npx tsx bench/runners/run.ts",
-    "pack:check": "npm pack --dry-run"
+    "schemas:generate": "npx tsx scripts/generate-schemas.ts",
+    "compat:check": "npx tsx scripts/compat-check.ts",
+    "pack:check": "npm pack --dry-run",
+    "verify": "npm run typecheck && npm run test:coverage && npm run bench && npm run pack:check",
+    "bench:model": "AGENT_TEAM_BENCH=1 node --experimental-strip-types bench/runners/run.ts 2>/dev/null || AGENT_TEAM_BENCH=1 npx tsx bench/runners/run.ts"
   },
   "publishConfig": {
     "access": "public"

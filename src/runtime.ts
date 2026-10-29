@@ -1,18 +1,18 @@
 import { Plugin } from "@opencode/plugin";
-import type { LindoOptions } from "./options.js";
+import type { AgentTeamOptions } from "./options.js";
 
-export type LindoContext = Parameters<Parameters<typeof Plugin.define>[0]["setup"]>[0];
+export type AgentTeamContext = Parameters<Parameters<typeof Plugin.define>[0]["setup"]>[0];
 
-export interface LindoRuntime {
-  ctx: LindoContext;
-  options: LindoOptions;
+export interface AgentTeamRuntime {
+  ctx: AgentTeamContext;
+  options: AgentTeamOptions;
 }
 
-export function createRuntime(ctx: LindoContext, options: LindoOptions): LindoRuntime {
+export function createRuntime(ctx: AgentTeamContext, options: AgentTeamOptions): AgentTeamRuntime {
   return { ctx, options };
 }
 
-export function projectRootOf(ctx: LindoContext): string {
+export function projectRootOf(ctx: AgentTeamContext): string {
   const loc = ctx.location as unknown as {
     project?: { canonical?: string; directory?: string };
     directory?: string;

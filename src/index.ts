@@ -7,7 +7,7 @@ import { registerTools } from "./tools/index.js";
 import { registerHooks } from "./hooks/index.js";
 
 export default Plugin.define({
-  id: "lindoelio.lindo",
+  id: "lindoelio.agent-team",
   async setup(ctx) {
     const options = parseOptions(ctx.options);
     const runtime = createRuntime(ctx, options);
