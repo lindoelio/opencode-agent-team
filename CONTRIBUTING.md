@@ -94,19 +94,36 @@ breaks, and why it now cannot.
 
 ## Releasing
 
+The npm publish is automated. Pushing a `v*` tag runs
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which verifies
+the tagged commit, publishes to npm with provenance, and creates the GitHub
+Release. You do not run `npm publish` by hand.
+
 1. Update `version` in `package.json`.
 2. Add the release section to `CHANGELOG.md`.
-3. `npm run verify` must pass.
+3. `npm run verify` must pass — CI runs the same gate on the tag.
 4. `npm pack --dry-run` (or `npm run pack:check`) — inspect the file list. The
    published package ships `src/`, `assets/` and `schemas/`; the plugin reads agent
    templates and skill files from disk at runtime, so a missing `assets/` entry
    breaks the installed plugin even though the tests pass.
-5. Tag the release and push the tag: `git tag v<version> && git push origin v<version>`.
-   The README's pinned install path (`opencode plugin add
-   github:lindoelio/opencode-agent-team#v<version>`) resolves to a **tag**, so a
-   release without a pushed tag is not installable by version. A version bump
-   without a tag is what left the tags behind the package version.
-6. `npm publish` — `publishConfig.access` is `public`.
+5. Commit, then tag and push the tag: `git tag -a v<version> -m "v<version>" && git push origin v<version>`.
+
+The tag is the trigger, and it must name the version being published: the
+workflow refuses a tag that disagrees with `package.json`'s `version`. The
+README's pinned install path (`opencode plugin add
+github:lindoelio/opencode-agent-team#v<version>`) also resolves to a **tag**, so
+a release without a pushed tag is not installable by version.
+
+To rehearse the release without publishing, run the workflow manually with
+**Inputs → dry-run** set to `true`. It verifies everything, checks the publish
+credential, and runs `npm publish --dry-run`.
+
+The publish credential is the repository secret `NPM_TOKEN`. It is a granular
+npm token with read-and-write access to all packages, created to expire on
+`2027-01-27` — the furthest date npm allows. npm is retiring tokens that
+publish directly while bypassing 2FA, so the durable answer is npm **trusted
+publishing**: once the package exists on npm, configure the GitHub Actions
+workflow as a trusted publisher on the package and drop the secret entirely.
 
 The plugin version the setup command writes into a consumer's `opencode.jsonc` is
 read from the shipped `package.json` (`packageVersion()` in
