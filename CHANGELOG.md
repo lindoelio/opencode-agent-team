@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-31
+
+### Added
+
+- **A global installation.** `/agent-team/setup --scope global` now installs
+  the Agent Team roster for every project: the ten agent files land in
+  `~/.config/opencode/agents/` and the plugin is recorded in the global
+  configuration file — `~/.config/opencode/opencode.json`, or the
+  `opencode.jsonc` already in that directory, which the host resolves last.
+  The global configuration directory follows `XDG_CONFIG_HOME` when that
+  variable is set, so a run pointed elsewhere writes there too.
+- **Two decisions are yours to make.** Whether the installed roster becomes
+  the default agent, and what the team leader is called. Pass
+  `--set-default` / `--no-default` and `--leader-title "..."` and the setup
+  never asks. Leave them out and the setup asks, through the agent in your
+  session, and writes nothing until you answer. A positive answer to the
+  default-agent question is recorded in the configuration file and is not
+  asked again; a negative one changes nothing, so it comes back on the next
+  global installation.
+- **A title for the team leader.** OpenCode derives an agent's visible name
+  from its file, so the title is the label at the head of the leader's
+  description — the place the agent picker and the `@` autocomplete show it.
+  The title is recorded in the managed marker, so it survives an update, and a
+  title that would make the agent file unreadable is refused before anything
+  is written.
+
+### Fixed
+
+- **The dry run named the wrong files.** The plan and the apply derived their
+  paths independently, so a global preview listed files the apply never
+  wrote. One scope value now decides where an installation writes, and both
+  read it.
+- **The global scope wrote in the wrong places.** The previous-version roster
+  cleanup scanned a directory the apply never touched, a stray `.agent-team/`
+  directory appeared in the user's home, the global configuration file was
+  never modified, the configuration file name was hardcoded to
+  `opencode.jsonc`, and the backups landed outside the directory they
+  protected.
+- **The global scope could not leave the user's plugin pinned.** An existing
+  plugin entry now keeps its specification exactly as written, and an entry
+  the global scope adds carries no version, so the installation keeps tracking
+  releases.
+- **The global scope can no longer export a project's settings.** The plugin
+  entry it records carries the plugin's own defaults, not the options of the
+  session that happened to run the setup. A project that configures the plugin
+  does not export its configuration to every project on the machine. The
+  project scope still records the session's options, as it always has.
+- **The plan and the apply disagreed about the default agent.** The preview
+  showed one change and the apply made another. Both resolve the same
+  decisions now.
+- **A configuration file that could not be parsed left a half-applied
+  installation.** The file is parsed before anything is written, so the setup
+  reports the error and changes nothing.
+
 ## [0.5.0] - 2026-10-29
 
 ### Added
