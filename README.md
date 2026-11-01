@@ -193,14 +193,42 @@ modified file is reported as *drifted* and never overwritten. Without `--apply`
 it prints the diff and writes nothing, which is the right way to look before
 you change a project.
 
+### The global scope
+
+`--scope global` installs the roster once, for every project: the ten agent
+files land in `~/.config/opencode/agents/` and the plugin is recorded in the
+global configuration file — `~/.config/opencode/opencode.json`, or the
+`opencode.jsonc` already in that directory, which the host resolves last. That
+directory follows `XDG_CONFIG_HOME` when the variable is set. The project's own
+configuration file is left alone, and the ledger stays per project.
+
+Two decisions in the global scope are yours to make, because they reach every
+project on the machine:
+
+- whether the team leader becomes the default agent;
+- what it is called. OpenCode derives an agent's visible name from its file,
+  so the title is the label at the head of the leader's description — the
+  place the agent picker and the `@` autocomplete show it.
+
+Pass them as flags and the setup never asks. Leave them out and the setup
+asks, through the agent in your session, and writes nothing until you
+answer. A positive answer to the default-agent question is recorded in the
+configuration file and is not asked again; a negative one changes nothing, so
+it comes back on the next global installation.
+
+```text
+/agent-team/setup --apply --scope global --set-default --leader-title "Meu Time"
+```
+
 | Flag | Effect |
 |---|---|
 | *(none)* | Dry run. Prints the file and config diff and writes nothing. |
 | `--apply` | Writes immediately. No extra confirmation. |
 | `--scope project` | Default. Writes to `.opencode/agents/` and merges `opencode.jsonc`. |
-| `--scope global` | Writes to `~/.config/opencode/agents/`. Project config is left alone. |
-| `--set-default` | Sets `default_agent: "team-leader"`. Implied by `--apply --scope project` unless `--no-default`. |
+| `--scope global` | Writes to `~/.config/opencode/agents/` and merges the global configuration file. The project's own configuration is left alone. |
+| `--set-default` | Records `default_agent: "team-leader"`. Implied by `--apply --scope project` unless `--no-default`. |
 | `--no-default` | Installs the roster without changing the default agent. |
+| `--leader-title "..."` | Names the team leader in the agent picker. It must be a single line that keeps the agent file readable; a title that would not is refused and nothing is written. |
 | `--update` | Refreshes the files that are already installed and managed. It does not create the files a newer version of the plugin introduced. |
 
 Then drive the loop:

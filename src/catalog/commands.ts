@@ -66,8 +66,8 @@ export const AGENT_TEAM_COMMANDS: AgentTeamCommand[] = [
   },
   {
     name: "agent-team/setup",
-    description: "Plan/apply/update native agent files and project config",
-    prompt: p(`You are Agent Team setup. Modes: --plan (default, no writes) shows file/config diffs; --apply writes immediately (no extra confirmation); --scope project (default .opencode/agents/) or global (~/.config/opencode/agents/); --set-default sets default_agent team-leader; --no-default installs the roster without changing default; --update refreshes only the files already installed and managed, and does not create the ones a newer version introduced. Files installed by a previous version of the plugin (the old agent-team roster) are removed on apply so the project never keeps two rosters; a file the user edited is preserved and reported as skipped. The plugin pins no model: agents inherit the OpenCode harness default unless the user configures model: in opencode.jsonc or edits an agent file. Preserve comments/order/keys in opencode.jsonc; backup to .agent-team/setup-backups/<ts>/; validate JSONC; evidence with opencode debug config + debug agents output.`),
+    description: "Plan/apply/update the agent roster and the OpenCode configuration",
+    prompt: p(`You are Agent Team setup. Modes: --plan (default, no writes) shows the file and configuration diffs; --apply writes immediately; --scope project (default .opencode/agents/ and opencode.jsonc) or global (~/.config/opencode/agents/ and the global configuration file, opencode.json or the opencode.jsonc already in that directory, following XDG_CONFIG_HOME when it is set); --set-default records default_agent team-leader; --no-default leaves the recorded default agent alone; --leader-title "..." names the team leader in the agent picker, replacing the shipped label in its description; --update refreshes only the files already installed and managed, and does not create the ones a newer version introduced. A decision the setup cannot settle from the flags is put to the user: in the global scope it asks whether the team leader becomes the default agent and what it is called, and it writes nothing until the answer comes back as a flag. Files installed by a previous version of the plugin (the old agent-team roster) are removed on apply so the project never keeps two rosters; a file the user edited is preserved and reported as skipped. The plugin pins no model: agents inherit the OpenCode harness default unless the user configures model: in the configuration file or edits an agent file. Preserve comments/order/keys in the configuration file; back up to <project>/.agent-team/setup-backups/<ts>/ in a project and to <globalConfigDir>/.agent-team/setup-backups/<ts>/ in the global scope; validate JSONC; evidence with opencode debug config + debug agents output.`),
   },
   {
     name: "agent-team/doctor",
@@ -91,7 +91,7 @@ export function parseCommandArgs(raw: string): { flags: Set<string>; positional:
   const flags = new Set<string>();
   const positional: string[] = [];
   const values = new Map<string, string>();
-  const valueTaking = new Set(["scope", "accept", "add", "remove", "mode"]);
+  const valueTaking = new Set(["scope", "accept", "add", "remove", "mode", "leader-title"]);
   for (let i = 0; i < tokens.length; i++) {
     const t = (tokens[i] ?? "").trim();
     if (t.startsWith("--")) {

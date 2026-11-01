@@ -83,11 +83,16 @@ removes:
 the `token` pattern and its value is replaced with `[REDACTED]`. Name usage
 counters `input` and `output`.
 
-The one write under `.agent-team/` that is not redacted is
+The writes that are not redacted are the setup backups:
 `setup-backups/<timestamp>/`, which copies a file the user already has in
-plaintext — `opencode.jsonc` or an agent file. It is a byte-for-byte backup of
-the user's own file, not a ledger document, and redacting it would make the
-backup useless for restoring what the user had.
+plaintext — the configuration file or an agent file. It is a byte-for-byte
+backup of the user's own file, not a ledger document, and redacting it would
+make the backup useless for restoring what the user had.
+
+There is one such directory per scope. In a project it is
+`<project>/.agent-team/setup-backups/`. In the global scope it is
+`<globalConfigDir>/.agent-team/setup-backups/`, inside the OpenCode
+configuration directory the setup already writes to.
 
 ### Path traversal and symlink escape are refused
 

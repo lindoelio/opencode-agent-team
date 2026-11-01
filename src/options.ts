@@ -100,6 +100,19 @@ export type DecisionOptions = z.infer<typeof DecisionOptionsSchema>;
 export const DECISION_DEFAULTS: DecisionOptions = DecisionOptionsSchema.parse({});
 
 /**
+ * The options an unconfigured installation runs with, as a configuration file
+ * records them.
+ *
+ * The global scope writes these rather than the options of the session that
+ * happened to run the setup: a project that configures the plugin must not
+ * export its settings to every project on the machine.
+ */
+export function defaultAgentTeamOptions(): Record<string, unknown> {
+  const parsed = AgentTeamOptionsSchema.parse({});
+  return { ...parsed, telemetry: false };
+}
+
+/**
  * The effective decision options. The block is optional in the configuration,
  * so every consumer resolves it through here rather than repeating the
  * fallback.

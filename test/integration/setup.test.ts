@@ -2,45 +2,43 @@ import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildSetupPlan } from "../../src/bootstrap/plan.js";
+import { buildSetupPlan, type SetupOptions } from "../../src/bootstrap/plan.js";
 import { applySetupPlan } from "../../src/bootstrap/apply.js";
 import { withHeader } from "../../src/bootstrap/jsonc.js";
+import { resolveScope, type Scope } from "../../src/bootstrap/scope.js";
+
+function scopeFor(root: string, kind: "project" | "global" = "project"): Scope {
+  return resolveScope({ kind, projectRoot: root, injectedConfigDir: path.join(root, "global-config"), env: {} });
+}
+
+function optionsFor(scope: Scope, extra: Partial<SetupOptions> = {}): SetupOptions {
+  return {
+    scope,
+    decisions: { setDefault: false, leaderTitle: undefined },
+    pending: [],
+    updateOnly: false,
+    pluginPackage: "@lindoelio/opencode-agent-team@0.1.3",
+    pluginOptions: {},
+    includePluginOptions: false,
+    ...extra,
+  };
+}
 
 describe("setup bootstrap", () => {
   it("plans then applies without overwriting user content", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-setup-"));
-    const plan = await buildSetupPlan({
-      scope: "project",
-      setDefault: true,
-      updateOnly: false,
-      projectRoot: root,
-      pluginPackage: "@lindoelio/opencode-agent-team@0.1.3",
-      pluginOptions: { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false },
-      includePluginOptions: false,
-    });
+    const scope = scopeFor(root);
+    const plan = await buildSetupPlan(optionsFor(scope, { decisions: { setDefault: true, leaderTitle: undefined } }));
     expect(plan.files.some((f) => f.path === ".opencode/agents/team-leader.md" && f.action === "create")).toBe(true);
-    const result = await applySetupPlan({
-      scope: "project",
-      setDefault: true,
-      updateOnly: false,
-      projectRoot: root,
-      pluginPackage: "@lindoelio/opencode-agent-team@0.1.3",
-      pluginOptions: { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false },
-      includePluginOptions: false,
-    });
+    const result = await applySetupPlan(optionsFor(scope, { decisions: { setDefault: true, leaderTitle: undefined } }));
     expect(result.created.length).toBeGreaterThan(5);
+    // the project scope records the leader as the default agent
+    const config = JSON.parse(await fs.promises.readFile(path.join(root, "opencode.jsonc"), "utf8")) as { default_agent?: string };
+    expect(config.default_agent).toBe("team-leader");
     // Second apply keeps; user edit is preserved.
     const agentPath = path.join(root, ".opencode", "agents", "team-leader.md");
     await fs.promises.writeFile(agentPath, "USER EDITED — not managed\n");
-    const result2 = await applySetupPlan({
-      scope: "project",
-      setDefault: false,
-      updateOnly: true,
-      projectRoot: root,
-      pluginPackage: "@lindoelio/opencode-agent-team@0.1.3",
-      pluginOptions: {},
-      includePluginOptions: false,
-    });
+    const result2 = await applySetupPlan(optionsFor(scope, { updateOnly: true }));
     const content = await fs.promises.readFile(agentPath, "utf8");
     expect(content).toContain("USER EDITED");
     expect(result2.skipped.join()).toContain(".opencode/agents/team-leader.md");
@@ -50,15 +48,8 @@ describe("setup bootstrap", () => {
     // created missing files too, it would be indistinguishable from `--apply`
     // and the flag would mean nothing.
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-setup-"));
-    const base = {
-      scope: "project" as const,
-      setDefault: false,
-      projectRoot: root,
-      pluginPackage: "@lindoelio/opencode-agent-team@0.4.0",
-      pluginOptions: {},
-      includePluginOptions: false,
-    };
-    const applied = await applySetupPlan({ ...base, updateOnly: false });
+    const base = optionsFor(scopeFor(root));
+    const applied = await applySetupPlan(base);
     expect(applied.created.length).toBeGreaterThan(0);
 
     // A file a newer plugin version introduced is not installed yet.
@@ -75,16 +66,9 @@ describe("setup bootstrap", () => {
     expect(fs.existsSync(missing)).toBe(false);
     expect(fs.existsSync(path.join(root, ".opencode", "agents", "team-leader.md"))).toBe(true);
   });
-  it("lets the user pin a model in an agent file without the setup overwriting it", async () => {    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-setup-"));
-    const base = {
-      scope: "project" as const,
-      setDefault: false,
-      updateOnly: false,
-      projectRoot: root,
-      pluginPackage: "@lindoelio/opencode-agent-team@0.3.0",
-      pluginOptions: {},
-      includePluginOptions: false,
-    };
+  it("lets the user pin a model in an agent file without the setup overwriting it", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-setup-"));
+    const base = optionsFor(scopeFor(root));
     await applySetupPlan(base);
     const agentPath = path.join(root, ".opencode", "agents", "team-leader.md");
     const original = await fs.promises.readFile(agentPath, "utf8");
@@ -101,15 +85,7 @@ describe("setup bootstrap", () => {
   });
   it("removes the previous-version roster and keeps a file the user edited", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-setup-"));
-    const base = {
-      scope: "project" as const,
-      setDefault: true,
-      updateOnly: false,
-      projectRoot: root,
-      pluginPackage: "@lindoelio/opencode-agent-team@0.3.0",
-      pluginOptions: {},
-      includePluginOptions: false,
-    };
+    const base = optionsFor(scopeFor(root));
     // A project installed with the previous version of the plugin.
     await fs.promises.mkdir(path.join(root, ".opencode", "agents", "agent-team"), { recursive: true });
     const legacy = "---\nmode: primary\n---\nold body\n";
@@ -129,9 +105,9 @@ describe("setup bootstrap", () => {
     expect(plan.files.find((f) => f.path === ".opencode/agents/agent-team/builder.md")?.action).toBe("keep-drifted");
 
     const applied = await applySetupPlan(base);
-    expect(applied.removed).toContain(".opencode/agents/agent-team.md");
-    expect(applied.removed).toContain(".opencode/agents/agent-team/verifier.md");
-    expect(applied.removed).not.toContain(".opencode/agents/agent-team/builder.md");
+    expect(applied.removed.join()).toContain(".opencode/agents/agent-team.md");
+    expect(applied.removed.join()).toContain(".opencode/agents/agent-team/verifier.md");
+    expect(applied.removed.join()).not.toContain(".opencode/agents/agent-team/builder.md");
     // the removed files are gone, the edited one survives, the new roster is in place
     await expect(fs.promises.access(path.join(root, ".opencode", "agents", "agent-team.md"))).rejects.toThrow();
     expect(await fs.promises.readFile(path.join(root, ".opencode", "agents", "agent-team", "builder.md"), "utf8")).toContain("MY OWN AGENT");
@@ -139,17 +115,9 @@ describe("setup bootstrap", () => {
     // the removal is backed up before it happens
     expect(applied.backups.length).toBeGreaterThan(0);
   });
-  it("updates intact managed files and skips config on global scope", async () => {
+  it("updates intact managed files and writes the global configuration", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-setup-"));
-    const base = {
-      scope: "project" as const,
-      setDefault: false,
-      updateOnly: false,
-      projectRoot: root,
-      pluginPackage: "@lindoelio/opencode-agent-team@0.1.3",
-      pluginOptions: {},
-      includePluginOptions: false,
-    };
+    const base = optionsFor(scopeFor(root));
     await applySetupPlan(base);
     // corrupt a managed header checksum: body matches the template, so apply repairs it (update path)
     const agentPath2 = path.join(root, ".opencode", "agents", "team-leader.md");
@@ -160,10 +128,14 @@ describe("setup bootstrap", () => {
     expect(again.updated.join()).toContain(".opencode/agents/team-leader.md");
     const repaired = await fs.promises.readFile(agentPath2, "utf8");
     expect(repaired).not.toContain("0000000000000000");
-    // global scope never touches project config and honors homeDir
-    const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-home-"));
-    const global = await applySetupPlan({ ...base, scope: "global", homeDir: home });
+    // the global scope installs the roster in the global configuration
+    // directory and writes the global configuration file
+    const globalScope = scopeFor(root, "global");
+    const global = await applySetupPlan(optionsFor(globalScope, { includePluginOptions: true }));
     expect(global.created.length).toBeGreaterThan(5);
-    expect(global.configChanged).toBe(false);
+    expect(global.configChanged).toBe(true);
+    expect(global.created.join()).toContain(path.join("global-config", "agents", "team-leader.md"));
+    // and writes nothing outside the global configuration directory
+    expect(global.created.join()).not.toContain(path.join(root, ".agent-team"));
   });
 });

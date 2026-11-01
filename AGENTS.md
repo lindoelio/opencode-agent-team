@@ -63,9 +63,11 @@ reaches disk. Name usage counters `input` / `output`. See [SECURITY.md](SECURITY
 
 **Every ledger document write goes through `writeLedgerDocument` in `src/ledger/store.ts`.**
 That is where redaction happens. Writing a new document type any other way bypasses
-redaction — that was a real leak fixed in 0.4.0. The one exception is
-`.agent-team/setup-backups/`, which copies a file the user already has in plaintext; it is a
-backup, not a ledger document, and it is deliberately byte-for-byte.
+redaction — that was a real leak fixed in 0.4.0. The one exception is the setup
+backup directory — `.agent-team/setup-backups/` in a project and
+`<globalConfigDir>/.agent-team/setup-backups/` in the global scope — which copies a file the
+user already has in plaintext; it is a backup, not a ledger document, and it is deliberately
+byte-for-byte.
 
 **Host APIs must compile on three SDK lines.** `npm run compat:check` builds and tests against
 `@opencode/plugin` 2.0.10, 2.1.4 and 2.2.0. Surfaces absent from the older typings (e.g.

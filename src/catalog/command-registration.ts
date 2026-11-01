@@ -1,11 +1,15 @@
 import { AGENT_TEAM_COMMANDS, parseCommandArgs } from "./commands.js";
-import { packageVersion } from "./agents.js";
+import { loadTemplates, packageVersion } from "./agents.js";
 import { applySetupPlan } from "../bootstrap/apply.js";
 import { buildSetupPlan, renderPlanText } from "../bootstrap/plan.js";
+import { resolveDecisions, type PendingDecision } from "../bootstrap/decisions.js";
+import { readConfigFile } from "../bootstrap/jsonc.js";
+import { resolveScope, type Scope } from "../bootstrap/scope.js";
+import { LEADER_REL, inspectLeaderFile, isValidLeaderTitle } from "../bootstrap/templates.js";
 import { runDoctor, renderDoctorReport } from "../doctor/checks.js";
 import { resolveDecisionGenerator } from "../compat/host.js";
 import { decisionReport, renderDecisionListing, thresholdsLine } from "../decision/catalog.js";
-import { decisionOptions } from "../options.js";
+import { decisionOptions, defaultAgentTeamOptions } from "../options.js";
 import { appendEvent, readState, storeContext } from "../ledger/store.js";
 import { project } from "../ledger/projection.js";
 import { projectRootOf, type AgentTeamRuntime } from "../runtime.js";
@@ -14,6 +18,46 @@ const PLUGIN_PACKAGE = `@lindoelio/opencode-agent-team@${packageVersion()}`;
 
 async function sendSessionText(runtime: AgentTeamRuntime, sessionID: string, text: string): Promise<void> {
   await runtime.ctx.session.synthetic({ sessionID, text } as never);
+}
+
+/**
+ * The question the setup puts to the user.
+ *
+ * The plugin has no interactive question surface, so the question travels
+ * through the agent already in the session: it asks with the question tool
+ * and re-runs the setup with the answer as an explicit flag.
+ *
+ * The re-run command carries every flag the invocation already had, so a
+ * decision the user already settled is not asked a second time. Only the
+ * global scope ever asks.
+ */
+function askForDecisions(scope: Scope, pending: PendingDecision[], flags: Set<string>, leaderTitle: string | undefined): string {
+  const questions: string[] = [];
+  const template: string[] = [];
+  const leaderPath = scope.resolve(LEADER_REL) ?? "the leader agent file";
+  if (pending.includes("setDefault")) {
+    questions.push(
+      `Question 1 — default agent: set "default_agent": "team-leader" in ${scope.configFile}, so every project opens with the Agent Team leader? (yes / no)`,
+    );
+  }
+  if (pending.includes("leaderTitle")) {
+    questions.push(
+      `Question 2 — leader title: what should the team leader be called in OpenCode? The title lands in ${leaderPath} and is shown beside "team-leader" in the agent picker. Default: "Team Leader".`,
+    );
+  }
+  if (flags.has("set-default")) template.push("--set-default");
+  else if (flags.has("no-default")) template.push("--no-default");
+  else if (pending.includes("setDefault")) template.push("--set-default|--no-default");
+  if (leaderTitle !== undefined) template.push(`--leader-title "${leaderTitle}"`);
+  else if (pending.includes("leaderTitle")) template.push('--leader-title "<the answer>"');
+  return [
+    "Ask the user with the question tool, then re-run the setup with the answers as explicit flags. Do not guess an answer.",
+    "",
+    ...questions,
+    "",
+    "Then run the command below, with <the answer> replaced by what the user said and with either --set-default or --no-default kept:",
+    `/agent-team/setup --apply --scope global ${template.join(" ")}`.trim(),
+  ].join("\n");
 }
 
 export async function registerCommands(runtime: AgentTeamRuntime): Promise<{ dispose: () => Promise<void> }> {
@@ -27,41 +71,93 @@ export async function registerCommands(runtime: AgentTeamRuntime): Promise<{ dis
           // Lifecycle commands execute locally for determinism.
           if (cmd.name === "agent-team/setup") {
             const parsed = parseCommandArgs(stripCommandPrefix(args, "agent-team/setup"));
-            const scope = parsed.get("scope") === "global" ? "global" : "project";
-            const setDefault = parsed.flags.has("set-default") || (!parsed.flags.has("no-default") && scope === "project" && parsed.flags.has("apply"));
-            const plan = await buildSetupPlan({
-              scope,
-              setDefault: parsed.flags.has("set-default"),
-              updateOnly: parsed.flags.has("update"),
-              projectRoot: projectRootOf(runtime.ctx),
-              pluginPackage: PLUGIN_PACKAGE,
-              pluginOptions: {
-                profile: runtime.options.profile,
-                strictEvidence: runtime.options.strictEvidence,
-                projectState: runtime.options.projectState,
-                telemetry: false,
-              },
-              includePluginOptions: true,
-            });
-            if (parsed.flags.has("apply")) {
-              const result = await applySetupPlan({
-                scope,
-                setDefault: parsed.flags.has("set-default") ? true : setDefault,
-                updateOnly: parsed.flags.has("update"),
-                projectRoot: projectRootOf(runtime.ctx),
-                pluginPackage: PLUGIN_PACKAGE,
-                pluginOptions: {
-                  profile: runtime.options.profile,
-                  strictEvidence: runtime.options.strictEvidence,
-                  projectState: runtime.options.projectState,
-                  telemetry: false,
-                },
-                includePluginOptions: true,
-              });
-              await sendSessionText(runtime, sessionID, `Agent Team setup applied.\nCreated: ${result.created.join(", ") || "(none)"}\nUpdated: ${result.updated.join(", ") || "(none)"}\nRemoved (previous roster): ${result.removed.join(", ") || "(none)"}\nSkipped (user content): ${result.skipped.join(", ") || "(none)"}\nBackups: ${result.backups.length}\nConfig changed: ${result.configChanged}${result.warnings.length > 0 ? `\nWarnings: ${result.warnings.join("; ")}` : ""}\n\nReload OpenCode and run /agent-team/doctor.`);
+            const kind = parsed.get("scope") === "global" ? ("global" as const) : ("project" as const);
+            const apply = parsed.flags.has("apply");
+            const updateOnly = parsed.flags.has("update");
+            const projectRoot = projectRootOf(runtime.ctx);
+            const scope = resolveScope({ kind, projectRoot, env: process.env });
+            const globalScope = kind === "global" ? scope : resolveScope({ kind: "global", projectRoot, env: process.env });
+
+            // The configuration file is parsed before anything is decided: a
+            // file the setup cannot read stops the run, and the question is
+            // never asked about a decision the answer cannot act on.
+            let recordedDefaultAgent: string | undefined;
+            try {
+              const config = await readConfigFile(scope.configFile);
+              const recorded = config["default_agent"];
+              recordedDefaultAgent = recorded === undefined ? undefined : String(recorded);
+            } catch (err) {
+              await sendSessionText(runtime, sessionID, `Agent Team setup stopped: ${(err as Error).message}`);
               return;
             }
-            await sendSessionText(runtime, sessionID, `${renderPlanText(plan)}\n\nDry run only. Re-run with --apply to write.`);
+
+            const leaderPath = scope.resolve(LEADER_REL);
+            const leader = leaderPath === null ? { exists: false, writable: true } : await inspectLeaderFile(leaderPath);
+            const globalLeaderPath = globalScope.resolve(LEADER_REL);
+            const globalLeader = globalLeaderPath === null ? { exists: false, writable: true } : await inspectLeaderFile(globalLeaderPath);
+
+            // A title that would change how the agent file is read stops the
+            // run before anything is written.
+            const title = parsed.get("leader-title");
+            if (title !== undefined) {
+              const templates = await loadTemplates();
+              const leaderTemplate = templates.get(LEADER_REL) ?? "";
+              if (!isValidLeaderTitle(leaderTemplate, title)) {
+                await sendSessionText(
+                  runtime,
+                  sessionID,
+                  "Agent Team setup stopped: the leader title is not valid. It must be a single line, hold no colon, no space before a hash, and not begin with a YAML indicator character.",
+                );
+                return;
+              }
+            }
+
+            const { decisions, pending } = resolveDecisions({
+              kind,
+              updateOnly,
+              flags: parsed.flags,
+              leaderTitle: title,
+              recordedDefaultAgent,
+              recordedTitle: leader.title,
+              globalRecordedTitle: globalLeader.title,
+              leaderFileWritable: leader.writable,
+            });
+
+            const options = {
+              scope,
+              decisions,
+              pending,
+              updateOnly,
+              pluginPackage: PLUGIN_PACKAGE,
+              // The global scope records the plugin's own defaults: a project
+              // that configures the plugin must not export its settings to
+              // every project on the machine.
+              pluginOptions:
+                scope.kind === "global"
+                  ? defaultAgentTeamOptions()
+                  : {
+                      profile: runtime.options.profile,
+                      strictEvidence: runtime.options.strictEvidence,
+                      projectState: runtime.options.projectState,
+                      telemetry: false,
+                    },
+              includePluginOptions: true,
+            };
+
+            if (pending.length > 0 && apply) {
+              // The plugin has no interactive question surface, so the
+              // question reaches the user through the agent already in the
+              // session.
+              await runtime.ctx.session.prompt({ sessionID, text: askForDecisions(scope, pending, parsed.flags, title) } as never);
+              return;
+            }
+            if (!apply) {
+              const plan = await buildSetupPlan(options);
+              await sendSessionText(runtime, sessionID, `${renderPlanText(plan)}\n\nDry run only. Re-run with --apply to write.`);
+              return;
+            }
+            const result = await applySetupPlan(options);
+            await sendSessionText(runtime, sessionID, `Agent Team setup applied.\nCreated: ${result.created.join(", ") || "(none)"}\nUpdated: ${result.updated.join(", ") || "(none)"}\nRemoved (previous roster): ${result.removed.join(", ") || "(none)"}\nSkipped (user content): ${result.skipped.join(", ") || "(none)"}\nNot materialised in this scope: ${result.notMaterialised.join(", ") || "(none)"}\nBackups: ${result.backups.length}\nConfig changed: ${result.configChanged}${result.warnings.length > 0 ? `\nWarnings: ${result.warnings.join("; ")}` : ""}\n\nReload OpenCode and run /agent-team/doctor.`);
             return;
           }
           if (cmd.name === "agent-team/guard") {

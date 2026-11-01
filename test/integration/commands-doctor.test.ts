@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createRuntime } from "../../src/runtime.js";
+import type { AgentTeamOptions } from "../../src/options.js";
 import { runDoctor, renderDoctorReport } from "../../src/doctor/report.js";
 import { registerCommands } from "../../src/catalog/command-registration.js";
 import { registerSkills } from "../../src/catalog/skill-registration.js";
@@ -96,7 +97,7 @@ describe("doctor", () => {
 });
 
 describe("command handlers", () => {
-  async function captureCommands(root: string, rootOverride?: string): Promise<{ defs: Array<{ name: string; execute: (input: never) => Promise<void> }>; sent: string[] }> {
+  async function captureCommands(root: string, rootOverride?: string, opts: AgentTeamOptions = OPTS): Promise<{ defs: Array<{ name: string; execute: (input: never) => Promise<void> }>; sent: string[] }> {
     const defs: Array<{ name: string; execute: (input: never) => Promise<void> }> = [];
     const sent: string[] = [];
     const ctx = baseCtx(rootOverride ?? root, {
@@ -114,9 +115,26 @@ describe("command handlers", () => {
         prompt: async ({ text }: { text: string }) => { sent.push(`PROMPT:${text}`); },
       },
     });
-    const runtime = createRuntime(ctx, OPTS);
+    const runtime = createRuntime(ctx, opts);
     await registerCommands(runtime);
     return { defs, sent };
+  }
+
+  /**
+   * The global scope follows the host's own configuration-home convention, so
+   * pointing that variable at a temporary directory keeps the command off the
+   * developer's real OpenCode configuration.
+   */
+  async function withConfigHome<T>(run: () => Promise<T>): Promise<T> {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-config-"));
+    const previous = process.env["XDG_CONFIG_HOME"];
+    process.env["XDG_CONFIG_HOME"] = dir;
+    try {
+      return await run();
+    } finally {
+      if (previous === undefined) delete process.env["XDG_CONFIG_HOME"];
+      else process.env["XDG_CONFIG_HOME"] = previous;
+    }
   }
 
   it("setup --plan dry-runs, status handles empty state, export previews", async () => {
@@ -124,7 +142,7 @@ describe("command handlers", () => {
     const { defs, sent } = await captureCommands(root);
     expect(defs).toHaveLength(15);
     const setup = defs.find((d) => d.name === "agent-team/setup")!;
-    await setup.execute({ sessionID: "s", prompt: { text: "/agent-team/setup --plan" }, delivery: "steer" } as never);
+    await withConfigHome(() => setup.execute({ sessionID: "s", prompt: { text: "/agent-team/setup --plan" }, delivery: "steer" } as never));
     expect(sent.join("\n")).toContain("Dry run only");
     const status = defs.find((d) => d.name === "agent-team/status")!;
     await status.execute({ sessionID: "s", prompt: { text: "/agent-team/status" }, delivery: "steer" } as never);
@@ -138,7 +156,7 @@ describe("command handlers", () => {
     await initializeState({ projectRoot: root, sessionId: "s", actor: "team-leader", outcome: "Win" });
     const { defs, sent } = await captureCommands(root);
     const setup = defs.find((d) => d.name === "agent-team/setup")!;
-    await setup.execute({ sessionID: "s", prompt: { text: "/agent-team/setup --apply --scope project" }, delivery: "steer" } as never);
+    await withConfigHome(() => setup.execute({ sessionID: "s", prompt: { text: "/agent-team/setup --apply --scope project" }, delivery: "steer" } as never));
     expect(sent.join("\n")).toContain("Agent Team setup applied");
     expect(await fs.promises.readFile(path.join(root, ".opencode", "agents", "team-leader.md"), "utf8")).toContain("You are Team Leader");
     const status = defs.find((d) => d.name === "agent-team/status")!;
@@ -149,11 +167,124 @@ describe("command handlers", () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-cmd-"));
     const { defs, sent } = await captureCommands(root);
     const setup = defs.find((d) => d.name === "agent-team/setup")!;
-    await setup.execute({ sessionID: "s", prompt: { text: "/agent-team/setup --plan --scope global" }, delivery: "steer" } as never);
+    await withConfigHome(() => setup.execute({ sessionID: "s", prompt: { text: "/agent-team/setup --plan --scope global" }, delivery: "steer" } as never));
     expect(sent.join("\n")).toContain("Agent Team setup plan");
     const doctor = defs.find((d) => d.name === "agent-team/doctor")!;
     await doctor.execute({ sessionID: "s", prompt: { text: "/agent-team/doctor" }, delivery: "steer" } as never);
     expect(sent.join("\n")).toContain("Agent Team Doctor");
+  });
+  it("global setup asks for the undecided decisions and writes nothing", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-cmd-"));
+    const { defs, sent } = await captureCommands(root);
+    const setup = defs.find((d) => d.name === "agent-team/setup")!;
+    await withConfigHome(async () => {
+      await setup.execute({ sessionID: "s", prompt: { text: "/agent-team/setup --apply --scope global" }, delivery: "steer" } as never);
+      const asked = sent.join("\n");
+      expect(asked).toContain("PROMPT:");
+      expect(asked).toContain("default_agent");
+      expect(asked).toContain("--leader-title");
+      expect(asked).not.toContain("Agent Team setup applied");
+      // the question names both files the answers change
+      expect(asked).toContain(path.join("opencode", "opencode.json"));
+      expect(asked).toContain(path.join("opencode", "agents", "team-leader.md"));
+      // and nothing was written
+      const written = await fs.promises.readdir(path.join(process.env["XDG_CONFIG_HOME"] ?? "", "opencode")).catch(() => [] as string[]);
+      expect(written).toEqual([]);
+    });
+  });
+  it("global setup reports a configuration file it cannot read", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-cmd-"));
+    const { defs, sent } = await captureCommands(root);
+    const setup = defs.find((d) => d.name === "agent-team/setup")!;
+    await withConfigHome(async () => {
+      const configDir = path.join(process.env["XDG_CONFIG_HOME"] ?? "", "opencode");
+      await fs.promises.mkdir(configDir, { recursive: true });
+      await fs.promises.writeFile(path.join(configDir, "opencode.json"), "{ broken !!!");
+      await setup.execute({ sessionID: "s", prompt: { text: "/agent-team/setup --apply --scope global" }, delivery: "steer" } as never);
+      const reported = sent.join("\n");
+      expect(reported).toContain("opencode.json");
+      expect(reported).toContain("parse errors");
+      expect(reported).not.toContain("PROMPT:");
+      expect(reported).not.toContain("Agent Team setup applied");
+    });
+  });
+  it("global setup keeps a settled flag in the re-run it asks for", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-cmd-"));
+    const { defs, sent } = await captureCommands(root);
+    const setup = defs.find((d) => d.name === "agent-team/setup")!;
+    await withConfigHome(() => setup.execute({ sessionID: "s", prompt: { text: "/agent-team/setup --apply --scope global --set-default" }, delivery: "steer" } as never));
+    const asked = sent.join("\n");
+    // the decision the user already settled is not asked again
+    expect(asked).not.toContain("Question 1");
+    expect(asked).toContain("Question 2");
+    // and the re-run carries the flag the invocation already had
+    expect(asked).toContain("--set-default");
+    expect(asked).toContain("--leader-title");
+    // the question names the file the answer changes
+    expect(asked).toContain(path.join("opencode", "agents", "team-leader.md"));
+    // and not the configuration file, whose value this invocation settled
+    expect(asked).not.toContain(path.join("opencode", "opencode.json"));
+  });
+
+  it("global setup records the plugin's defaults, not the session's options", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-cmd-"));
+    // a session that configures the plugin differently from the defaults
+    const { defs } = await captureCommands(root, undefined, {
+      profile: "private",
+      strictEvidence: false,
+      projectState: ".my-state",
+      telemetry: false,
+    } as never);
+    const setup = defs.find((d) => d.name === "agent-team/setup")!;
+    const config = await withConfigHome(async () => {
+      await setup.execute({ sessionID: "s", prompt: { text: '/agent-team/setup --apply --scope global --set-default --leader-title "Meu Time"' }, delivery: "steer" } as never);
+      const configDir = path.join(process.env["XDG_CONFIG_HOME"] ?? "", "opencode");
+      return JSON.parse(await fs.promises.readFile(path.join(configDir, "opencode.json"), "utf8")) as {
+        plugins: Array<{ package: string; options: { profile: string; strictEvidence: boolean; projectState: string } }>;
+      };
+    });
+    expect(config.plugins[0]!.options.profile).toBe("public");
+    expect(config.plugins[0]!.options.strictEvidence).toBe(true);
+    expect(config.plugins[0]!.options.projectState).toBe(".agent-team");
+  });
+
+  it("project setup records the session's options", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-cmd-"));
+    const { defs } = await captureCommands(root, undefined, {
+      profile: "private",
+      strictEvidence: false,
+      projectState: ".my-state",
+      telemetry: false,
+    } as never);
+    const setup = defs.find((d) => d.name === "agent-team/setup")!;
+    await withConfigHome(() => setup.execute({ sessionID: "s", prompt: { text: "/agent-team/setup --apply --scope project" }, delivery: "steer" } as never));
+    const config = JSON.parse(await fs.promises.readFile(path.join(root, "opencode.jsonc"), "utf8")) as {
+      plugins: Array<{ options: { profile: string; strictEvidence: boolean; projectState: string } }>;
+    };
+    expect(config.plugins[0]!.options.profile).toBe("private");
+    expect(config.plugins[0]!.options.strictEvidence).toBe(false);
+    expect(config.plugins[0]!.options.projectState).toBe(".my-state");
+  });
+
+  it("global setup with the explicit flags installs the roster and the title", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-cmd-"));
+    const { defs, sent } = await captureCommands(root);
+    const setup = defs.find((d) => d.name === "agent-team/setup")!;
+    await withConfigHome(() =>
+      setup.execute({ sessionID: "s", prompt: { text: '/agent-team/setup --apply --scope global --set-default --leader-title "Meu Time"' }, delivery: "steer" } as never),
+    );
+    expect(sent.join("\n")).toContain("Agent Team setup applied");
+    expect(sent.join("\n")).not.toContain("PROMPT:");
+  });
+  it("setup refuses a leader title that would break the agent file", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-cmd-"));
+    const { defs, sent } = await captureCommands(root);
+    const setup = defs.find((d) => d.name === "agent-team/setup")!;
+    await withConfigHome(() =>
+      setup.execute({ sessionID: "s", prompt: { text: '/agent-team/setup --apply --scope global --set-default --leader-title "Boss:"' }, delivery: "steer" } as never),
+    );
+    expect(sent.join("\n")).toContain("leader title is not valid");
+    expect(sent.join("\n")).not.toContain("Agent Team setup applied");
   });
   it("guard command reports and edits guardrails deterministically", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-cmd-"));

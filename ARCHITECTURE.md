@@ -75,7 +75,7 @@ Two consequences shape the code:
 | `src/hooks/` | Host hook handlers: session context, prompt, permission, retry, tool audit |
 | `src/domain/` | Pure logic: authority matrix, gate algebra, evidence rules, scope matching, phase machine, all Zod schemas |
 | `src/ledger/` | The event store, the hash chain, the projection, redaction, migrations, schema generation |
-| `src/bootstrap/` | `/agent-team/setup`: planning and applying the native agent files and project config |
+| `src/bootstrap/` | `/agent-team/setup`: planning and applying the native agent files and the configuration. `scope.ts` is the single source of paths for a scope, consumed by both the plan and the apply; `decisions.ts` resolves the two decisions the command asks about; `templates.ts` renders the leader title |
 | `src/doctor/` | Preflight checks and the report renderer |
 | `src/decision/` | The decision capability: catalog discovery, the host protocol, the state screen and the held decisions |
 | `src/compat/` | Host version and host API surface detection |
@@ -285,7 +285,29 @@ worker, reviewer, security and release specialists.
 
 - The **templates** in `assets/agents/` are the source. `/agent-team/setup`
   materializes them into `.opencode/agents/`, preserving a user-edited file and
-  reporting it as drifted rather than overwriting it.
+  reporting it as drifted rather than overwriting it. The same command
+  materializes them into `~/.config/opencode/agents/` under `--scope global`,
+  so the roster is available in every project.
+- **One scope value decides where an installation writes.** `src/bootstrap/scope.ts`
+  resolves the configuration directory, the agents directory, the configuration
+  file, the backup directory and the path of every managed template. The plan
+  and the apply both take it, so a dry run names the file the apply writes.
+  The global scope follows the host's own convention — `XDG_CONFIG_HOME` when
+  it is set, the home directory's `.config` otherwise. The project scope backs
+  up to `<project>/.agent-team/setup-backups/<ts>/` and the global scope to
+  `<globalConfigDir>/.agent-team/setup-backups/<ts>/`, so the copy of a
+  modified configuration file sits beside the file it protects.
+- **The managed marker carries the title.** Every file the plugin installs ends
+  with a marker recording its version, the checksum of its body and — for the
+  leader — the title it was installed with, encoded so the marker stays one
+  line of tokens. The title is read back from there, which is what lets an
+  update preserve it.
+- **Two decisions are the user's.** Whether the installed roster becomes the
+  default agent, and what the team leader is called. Both are settled by a
+  flag, and when no flag settles them the setup asks through the agent in the
+  session and writes nothing until the answer comes back. The title is the
+  label at the head of the leader's description, because the host derives an
+  agent's visible name from its file and exposes no other label.
 - The **skill map** in `src/catalog/skills.ts` maps 18 skills onto roles. It is
   injected into the role's system prompt, so skill awareness is deterministic
   rather than remembered. The map and the templates' `## Skills` blocks are

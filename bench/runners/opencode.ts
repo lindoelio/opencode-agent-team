@@ -247,11 +247,13 @@ export async function createProject(
  */
 export async function materializeRoster(root: string): Promise<void> {
   const { applySetupPlan } = await import("../../src/bootstrap/apply.js");
+  const { resolveScope } = await import("../../src/bootstrap/scope.js");
+  const scope = resolveScope({ kind: "project", projectRoot: root, injectedConfigDir: path.join(root, "global-config"), env: {} });
   await applySetupPlan({
-    scope: "project",
-    setDefault: true,
+    scope,
+    decisions: { setDefault: true, leaderTitle: undefined },
+    pending: [],
     updateOnly: false,
-    projectRoot: root,
     pluginPackage: "@lindoelio/opencode-agent-team",
     pluginOptions: { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false },
     includePluginOptions: true,
