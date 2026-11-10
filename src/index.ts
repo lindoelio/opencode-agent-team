@@ -5,6 +5,7 @@ import { registerCommands } from "./catalog/command-registration.js";
 import { registerSkills } from "./catalog/skill-registration.js";
 import { registerTools } from "./tools/index.js";
 import { registerHooks } from "./hooks/index.js";
+import { reconcileRunning, registerOrchestrator } from "./orchestrator/launch.js";
 
 export default Plugin.define({
   id: "lindoelio.agent-team",
@@ -17,7 +18,9 @@ export default Plugin.define({
       registerSkills(runtime),
       registerTools(runtime),
       registerHooks(runtime),
+      registerOrchestrator(runtime),
     ]);
+    await reconcileRunning(runtime).catch(() => {});
 
     return async () => {
       await Promise.all(registrations.map((registration) => registration.dispose()));

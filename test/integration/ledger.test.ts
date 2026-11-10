@@ -128,14 +128,14 @@ describe("ledger store", () => {
     const statePath = path.join(root, ".agent-team", "state.json");
     await fs.promises.writeFile(statePath, JSON.stringify(v1, null, 2));
     const migrated = await readState(root);
-    expect(migrated?.schemaVersion).toBe(2);
+    expect(migrated?.schemaVersion).toBe(3);
     expect(migrated?.engagement.phase).toBe("EXECUTE");
     expect(migrated?.engagement.status).toBe("DELIVERY_READY");
     expect(migrated?.activeDelivery?.allowedScope).toEqual(["src/a.ts"]);
     expect(migrated?.handoffs[0]?.role).toBe("reviewer");
-    // the file on disk is rewritten as v2
+    // the file on disk is rewritten as v3
     const onDisk = JSON.parse(await fs.promises.readFile(statePath, "utf8")) as Record<string, unknown>;
-    expect(onDisk["schemaVersion"]).toBe(2);
+    expect(onDisk["schemaVersion"]).toBe(3);
     expect(onDisk["activeSlice"]).toBeUndefined();
     // and the pre-migration file is preserved
     const backups = await fs.promises.readdir(path.join(root, ".agent-team", "setup-backups"));

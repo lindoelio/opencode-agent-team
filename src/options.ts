@@ -15,6 +15,12 @@ export const AutonomySchema = z.object({
    * action to ASK. Empty by default — nothing is asked.
    */
   askBefore: z.array(z.string()).default([]),
+  /**
+   * The operator's recorded permission to push, tag, publish, or deploy.
+   * Absence means false: promotion is denied, not asked. An ask-before match
+   * does not authorize promotion and does not turn the denial into a question.
+   */
+  allowPromotion: z.boolean().optional(),
 });
 
 /**
@@ -43,6 +49,11 @@ export const OrchestrationSchema = z.object({
    * independent unit in parallel — it just does it in bounded waves.
    */
   maxParallelSpecialists: z.number().int().min(1).max(32).default(6),
+  /**
+   * Extra command prefixes a delivery may declare as a validation step. The
+   * built-in list is always in force; this only extends it.
+   */
+  allowedCheckPrefixes: z.array(z.string()).default([]),
 });
 
 /** How the decision capability behaves. `off` refuses every decision. */
@@ -85,7 +96,7 @@ export const AgentTeamOptionsSchema = z.object({
   model: ModelOptionsSchema.optional(),
   telemetry: z.boolean().default(false),
   autonomy: AutonomySchema.default({ mode: "yolo", askBefore: [] }),
-  orchestration: OrchestrationSchema.default({ maxParallelSpecialists: 6 }),
+  orchestration: OrchestrationSchema.default({ maxParallelSpecialists: 6, allowedCheckPrefixes: [] }),
   decision: DecisionOptionsSchema.optional(),
 });
 export type AgentTeamOptions = z.infer<typeof AgentTeamOptionsSchema>;

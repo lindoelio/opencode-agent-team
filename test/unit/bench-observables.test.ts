@@ -18,7 +18,7 @@ function obs(partial: Partial<BenchObservation>): BenchObservation {
 }
 
 const FULL_LEDGER = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   engagement: { phase: "ACCEPT", status: "ACCEPTED" },
   assumptions: [{ basis: "VERIFIED", statement: "a" }, { basis: "INFERENCE", statement: "b" }],
   decisions: [{ id: "DEC-0001", options: [{}, {}] }],

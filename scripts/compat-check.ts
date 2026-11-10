@@ -22,7 +22,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ALL_SDKS = ["2.0.10", "2.1.4", "2.2.0"];
+const ALL_SDKS = ["2.2.0"];
 const requested = process.argv[2];
 const SUPPORTED_SDKS = requested ? [requested] : ALL_SDKS;
 

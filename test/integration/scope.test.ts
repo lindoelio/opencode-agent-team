@@ -50,6 +50,8 @@ describe("handoff scope is enforced, not advisory", () => {
       {
         options: {},
         location: { project: { canonical: root } },
+        app: { version: "2.2.0" },
+        session: { create: async () => ({ id: "ses_child" }), prompt: async () => ({}) },
         tool: {
           transform: async () => ({ dispose: async () => {} }),
           list: async () => [],
@@ -63,22 +65,16 @@ describe("handoff scope is enforced, not advisory", () => {
       OPTS,
     );
     await executeState(runtime, { action: "initialize", outcome: "O" }, leader);
-    await executeHandoff(
-      runtime,
-      {
-        action: "prepare",
-        expectedRevision: 0,
-        role: "coder",
-        objective: "implement the board",
-        context: [],
-        allowedScope: ["src/**"],
-        prohibitedScope: ["src/secret.ts"],
-        questions: [],
-        requiredEvidence: [],
-        stopCondition: "done",
-      },
-      leader,
-    );
+    const { storeContext, appendEvent } = await import("../../src/ledger/store.js");
+    await appendEvent(storeContext(root, "sess-1", "team-leader"), "handoff.launched", { id: "HND-0001" }, (s) => ({
+      ...s,
+      handoffs: [...s.handoffs, {
+        id: "HND-0001", role: "coder" as const, objective: "implement the board", context: [],
+        allowedScope: ["src/**"], prohibitedScope: ["src/secret.ts"], questions: [], requiredEvidence: [],
+        stopCondition: "done", skills: [], dependsOn: [], status: "running" as const,
+        sessionID: "sess-coder", parentSessionID: "sess-1",
+      }],
+    }));
     await registerToolAuditHooks(runtime);
     if (!captured.before) throw new Error("the execute.before hook was not registered");
     return { root, runtime, before: captured.before };
@@ -88,17 +84,17 @@ describe("handoff scope is enforced, not advisory", () => {
 
   it("refuses a write outside the handoff's allowed scope", async () => {
     const { root, before } = await setup();
-    await expect(before!({ tool: "write", agent: "team-leader/coder", sessionID: "s", input: { path: path.join(root, "docs/notes.md") } })).rejects.toThrow(/outside the allowed scope/);
+    await expect(before!({ tool: "write", agent: "team-leader/coder", sessionID: "sess-coder", input: { path: path.join(root, "docs/notes.md") } })).rejects.toThrow(/outside the allowed scope/);
   });
 
   it("refuses a write inside the prohibited scope", async () => {
     const { root, before } = await setup();
-    await expect(before!({ tool: "write", agent: "team-leader/coder", sessionID: "s", input: { path: path.join(root, "src/secret.ts") } })).rejects.toThrow(/prohibited scope/);
+    await expect(before!({ tool: "write", agent: "team-leader/coder", sessionID: "sess-coder", input: { path: path.join(root, "src/secret.ts") } })).rejects.toThrow(/prohibited scope/);
   });
 
   it("allows a write inside the allowed scope", async () => {
     const { root, before } = await setup();
-    await expect(before!({ tool: "write", agent: "team-leader/coder", sessionID: "s", input: { path: path.join(root, "src/board.ts") } })).resolves.toBeUndefined();
+    await expect(before!({ tool: "write", agent: "team-leader/coder", sessionID: "sess-coder", input: { path: path.join(root, "src/board.ts") } })).resolves.toBeUndefined();
   });
 
   it("does not scope-check the leader", async () => {
@@ -114,26 +110,49 @@ describe("independent review", () => {
     expect(check.reason).toContain("no completed");
   });
 
-  it("is satisfied by a reviewer handoff when nothing was implemented", () => {
+  const handoff = (over: Record<string, unknown>) => ({
+    id: "HND-0001", role: "coder" as const, objective: "o", context: [], allowedScope: ["src/**"], prohibitedScope: [],
+    questions: [], requiredEvidence: [], stopCondition: "s", skills: [], dependsOn: [], status: "completed" as const,
+    sessionID: "ses_coder", ...over,
+  });
+
+  it("is not satisfied by a reviewer handoff when nothing was implemented", () => {
+    const check = independentReviewCheck([handoff({ role: "reviewer", sessionID: "ses_reviewer" })]);
+    expect(check.satisfied).toBe(false);
+    expect(check.reason).toContain("no implementation");
+  });
+
+  it("refuses a reviewer that misses a changed path", () => {
     const check = independentReviewCheck([
-      { id: "HND-0001", role: "reviewer", objective: "o", context: [], allowedScope: ["src/**"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "s", skills: [], dependsOn: [], status: "completed" },
-    ]);
-    expect(check.satisfied).toBe(true);
+      handoff({}),
+      handoff({ id: "HND-0002", role: "reviewer", sessionID: "ses_reviewer" }),
+    ], ["docs/notes.md"]);
+    expect(check.satisfied).toBe(false);
+    expect(check.reason).toContain("docs/notes.md");
   });
 
   it("refuses a reviewer that was not pointed at the implementation", () => {
     const check = independentReviewCheck([
-      { id: "HND-0001", role: "coder", objective: "o", context: [], allowedScope: ["src/**"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "s", skills: [], dependsOn: [], status: "completed" },
-      { id: "HND-0002", role: "reviewer", objective: "o", context: [], allowedScope: ["docs/**"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "s", skills: [], dependsOn: [], status: "completed" },
+      handoff({}),
+      handoff({ id: "HND-0002", role: "reviewer", allowedScope: ["docs/**"], sessionID: "ses_reviewer" }),
     ]);
     expect(check.satisfied).toBe(false);
     expect(check.reason).toContain("does not cover the scope");
   });
 
+  it("refuses a reviewer that shares the author session", () => {
+    const check = independentReviewCheck([
+      handoff({ sessionID: "ses_same" }),
+      handoff({ id: "HND-0002", role: "reviewer", sessionID: "ses_same" }),
+    ]);
+    expect(check.satisfied).toBe(false);
+    expect(check.reason).toContain("session that wrote");
+  });
+
   it("accepts a reviewer that covers the implementation", () => {
     const check = independentReviewCheck([
-      { id: "HND-0001", role: "coder", objective: "o", context: [], allowedScope: ["src/**"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "s", skills: [], dependsOn: [], status: "completed" },
-      { id: "HND-0002", role: "reviewer", objective: "o", context: [], allowedScope: ["src/**"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "s", skills: [], dependsOn: ["HND-0001"], status: "completed" },
+      handoff({}),
+      handoff({ id: "HND-0002", role: "reviewer", sessionID: "ses_reviewer" }),
     ]);
     expect(check.satisfied).toBe(true);
   });

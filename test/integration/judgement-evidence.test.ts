@@ -6,7 +6,8 @@ import { _resetHeldDecisionsForTests } from "../../src/decision/cache.js";
 import { _resetDecisionModelCatalogForTests } from "../../src/decision/catalog.js";
 import { createRuntime, type AgentTeamRuntime } from "../../src/runtime.js";
 import { runDoctor } from "../../src/doctor/checks.js";
-import { claimSupported } from "../../src/domain/evidence.js";
+import { kindMeets } from "../../src/domain/evidence.js";
+import { recordObservedEvidence } from "../../src/orchestrator/observe.js";
 import { executeDelivery } from "../../src/tools/delivery.js";
 import { executeEvaluateDecision } from "../../src/tools/evaluate-decision.js";
 import { executeEvidence } from "../../src/tools/evidence.js";
@@ -17,10 +18,11 @@ import { readState } from "../../src/ledger/store.js";
 
 const tool = { sessionID: "sess-1", agent: "team-leader" } as never;
 
-function runtimeFor(root: string, strictEvidence = true): AgentTeamRuntime {
+function runtimeFor(root: string, strictEvidence = true, answers: unknown[] = [{ type: "predicate", name: "is_safe", probability: 0.95 }]): AgentTeamRuntime {
   const ctx = {
     app: { version: "2.2.0" },
     location: { project: { canonical: root } },
+    session: { create: async () => ({ id: "ses_child" }), prompt: async () => ({}) },
     model: {
       list: async () => [
         { id: "jev", modelID: "jev", providerID: "p", name: "Jev", type: "decision", enabled: true, status: "active", cost: [{ input: 0.05, output: 0 }], limit: { context: 32000 } },
@@ -28,7 +30,7 @@ function runtimeFor(root: string, strictEvidence = true): AgentTeamRuntime {
     },
     experimental: {
       generate: {
-        decisions: async () => ({ answers: [{ type: "predicate", name: "is_safe", probability: 0.95 }], tokens: { input: 120, output: 0 } }),
+        decisions: async () => ({ answers, tokens: { input: 120, output: 0 } }),
       },
     },
   } as never;
@@ -54,7 +56,7 @@ async function project(runtime: AgentTeamRuntime): Promise<string> {
       happyPath: ["one thin flow"],
       allowedScope: ["src"],
       acceptanceCriteria: ["criterion-one"],
-      validationSteps: ["run the tests"],
+      validationSteps: ["npm test"],
       rollback: "revert",
     },
     tool,
@@ -69,18 +71,18 @@ async function revisionOf(runtime: AgentTeamRuntime): Promise<number> {
   return state.revision;
 }
 
-/** A completed reviewer handoff, so the ACCEPT gate reaches the evidence check. */
+/** A completed implementation and reviewer handoff, so ACCEPT reaches the evidence check. */
 async function withIndependentReview(runtime: AgentTeamRuntime): Promise<number> {
-  await executeHandoff(
-    runtime,
-    { action: "prepare", expectedRevision: await revisionOf(runtime), role: "reviewer", objective: "review the delivery", context: [], allowedScope: ["src"], prohibitedScope: [], questions: [], requiredEvidence: ["test output"], stopCondition: "findings listed" },
-    tool,
-  );
-  await executeHandoff(
-    runtime,
-    { action: "complete", expectedRevision: await revisionOf(runtime), handoffId: "HND-0001", result: { status: "PASS", summary: "looks good", findings: [], risks: [], unknowns: [], recommended_next_action: "accept" } },
-    tool,
-  );
+  const root = (runtime.ctx as unknown as { location: { project: { canonical: string } } }).location.project.canonical;
+  const { storeContext, appendEvent } = await import("../../src/ledger/store.js");
+  await appendEvent(storeContext(root, "sess-1", "team-leader"), "handoff.launched", { id: "HND-0001" }, (s) => ({
+    ...s,
+    handoffs: [
+      ...s.handoffs,
+      { id: "HND-0001", role: "coder" as const, objective: "implement", context: [], allowedScope: ["src"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "done", skills: [], dependsOn: [], status: "completed" as const, sessionID: "ses_coder", parentSessionID: "sess-1" },
+      { id: "HND-0002", role: "reviewer" as const, objective: "review", context: [], allowedScope: ["src"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "done", skills: [], dependsOn: [], status: "completed" as const, sessionID: "ses_reviewer", parentSessionID: "sess-1" },
+    ],
+  }));
   return revisionOf(runtime);
 }
 
@@ -94,6 +96,21 @@ async function fresh(strictEvidence = true): Promise<{ runtime: AgentTeamRuntime
 const question = { type: "predicate" as const, name: "is_safe", instructions: "Is this safe?" };
 
 describe("a judgement evidence row", () => {
+  it("records choice, score and error answers from the plugin's own decision", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-judgement-"));
+    _resetHeldDecisionsForTests();
+    _resetDecisionModelCatalogForTests();
+    const runtime = runtimeFor(root, true, [
+      { type: "choice", name: "pick", choice: "a", probabilities: [{ value: "a", probability: 0.95 }], confidence: 0.9 },
+      { type: "score", name: "score", score: 4, probabilities: [{ value: 4, label: "high", probability: 0.95 }], confidence: 0.9 },
+      { type: "error", name: "bad", reason: "no answer" },
+    ]);
+    await project(runtime);
+    const decision = JSON.parse((await executeEvaluateDecision(runtime, { criterionId: "criterion-one", state: "a diff", questions: [question] }, tool)).content);
+    const result = JSON.parse((await executeEvidence(runtime, { expectedRevision: 1, criterionId: "criterion-one", kind: "judgment", status: "pass", summary: "d", observedAt: "t", decisionId: decision.decisionId }, tool)).content);
+    expect(result.verdict).toBe("unanswered");
+  });
+
   it("is recorded as a judgement row whose status is never passing or failing", async () => {
     const { runtime } = await fresh();
     await project(runtime);
@@ -152,15 +169,34 @@ describe("a judgement evidence row", () => {
     expect(gate.missing).toContain("criterion-one");
   });
 
-  it("does not fail a criterion that another row already satisfies", async () => {
+  it("refuses a judgement row with no decision id", async () => {
     const { runtime } = await fresh();
     await project(runtime);
+    await expect(executeEvidence(runtime, { expectedRevision: 1, criterionId: "criterion-one", kind: "judgment", status: "partial", summary: "s", observedAt: "t" }, tool)).rejects.toThrow(/decisionId is required/);
+  });
+
+  it("refuses a judgement that names a decision the plugin did not run", async () => {
+    const { runtime } = await fresh();
+    await project(runtime);
+    await expect(executeEvidence(runtime, { expectedRevision: 1, criterionId: "criterion-one", kind: "judgment", status: "partial", summary: "s", observedAt: "t", decisionId: "JDG-UNKNOWN" }, tool)).rejects.toThrow(/not one this plugin executed/);
+  });
+
+  it("refuses a reported block that names a different decision", async () => {
+    const { runtime } = await fresh();
+    await project(runtime);
+    const block = {
+      model: "p/jev", answers: [{ name: "q", type: "predicate" as const, probability: 0.9 }], role: "team-leader", use: "default" as const,
+      thresholds: { probability: 0.85, confidence: 0.7 }, criterion: "criterion-one", decisionId: "JDG-DIFFERENT", verdict: "satisfied" as const,
+      verified: false, stateDigest: "d", rationale: "r", elapsedMs: 1, usage: { input: 1, output: 0 },
+    };
+    await expect(executeEvidence(runtime, { expectedRevision: 1, criterionId: "criterion-one", kind: "judgment", status: "partial", summary: "s", observedAt: "t", decisionId: "JDG-OTHER", judgment: block }, tool)).rejects.toThrow(/different decision/);
+  });
+
+  it("does not fail a criterion that another row already satisfies", async () => {
+    const { runtime } = await fresh();
+    const root = await project(runtime);
     const decision = JSON.parse((await executeEvaluateDecision(runtime, { criterionId: "criterion-one", state: "a diff", questions: [question] }, tool)).content);
-    await executeEvidence(
-      runtime,
-      { expectedRevision: 1, criterionId: "criterion-one", kind: "test", status: "pass", summary: "tests pass", observedAt: new Date().toISOString(), command: "npm test" },
-      tool,
-    );
+    await recordObservedEvidence(root, { criterionId: "criterion-one", kind: "test", summary: "tests pass", command: "npm test", exitCode: 0, output: "ok" });
     await executeEvidence(
       runtime,
       { expectedRevision: 2, criterionId: "criterion-one", kind: "judgment", status: "fail", summary: "a decision", observedAt: new Date().toISOString(), decisionId: decision.decisionId },
@@ -360,8 +396,8 @@ describe("the verdict on a judgement row", () => {
   });
 
   it("supports no canonical claim, whatever the claim says", () => {
-    expect(claimSupported("judgment", "production healthy")).toEqual({ ok: false, reason: "claim exceeds judgment evidence strength" });
-    expect(claimSupported("judgment", "deployed")).toEqual({ ok: false, reason: "claim exceeds judgment evidence strength" });
-    expect(claimSupported("judgment", "end to end correctness")).toEqual({ ok: false, reason: "claim exceeds judgment evidence strength" });
+    expect(kindMeets("judgment", "test")).toBe(false);
+    expect(kindMeets("judgment", "runtime")).toBe(false);
+    expect(kindMeets("judgment", "review")).toBe(false);
   });
 });

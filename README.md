@@ -6,8 +6,8 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/lindoelio/opencode-agent-team/ci.yml?label=CI&style=flat-square)](https://github.com/lindoelio/opencode-agent-team/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-2563eb?style=flat-square)](LICENSE)
-[![OpenCode](https://img.shields.io/badge/OpenCode-2.0%20%7C%202.1%20%7C%202.2-8b5cf6?style=flat-square)](https://opencode.ai/docs)
-[![SDK](https://img.shields.io/badge/%40opencode%2Fplugin-%3E%3D2.0.10%20%3C2.3.0-8b5cf6?style=flat-square)](https://www.npmjs.com/package/@opencode/plugin)
+[![OpenCode](https://img.shields.io/badge/OpenCode-2.2.0%2B-8b5cf6?style=flat-square)](https://opencode.ai/docs)
+[![SDK](https://img.shields.io/badge/%40opencode%2Fplugin-%3E%3D2.2.0%20%3C2.3.0-8b5cf6?style=flat-square)](https://www.npmjs.com/package/@opencode/plugin)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-5fa04e?style=flat-square)](https://nodejs.org)
 
 </div>
@@ -25,7 +25,7 @@ ledger, and deterministic evidence gates.
 | **Orchestrator** | `team-leader` — the single human interface and the single ledger owner |
 | **Specialists** | 9 roles: explorer, product, architect, designer, coder, worker, reviewer, security, release |
 | **Model** | **No pin** — agents inherit the OpenCode harness default |
-| **Runtime** | OpenCode `2.0.x`, `2.1.x`, `2.2.x` — no fork, no remote service, telemetry off |
+| **Runtime** | OpenCode `2.2.0` or newer — no fork, no remote service, telemetry off |
 | **State** | `.agent-team/` — event-sourced, with a compact projection injected into every session |
 | **Orchestration** | Delegation by default, parallel waves inside a bounded budget |
 | **Domain** | Any company, startup or founder context — not only code |
@@ -102,7 +102,7 @@ are not.
 | `INTENT` | An outcome is recorded. |
 | `DISCOVERY` | Assumptions and decisions exist. |
 | `PLAN` | An active Delivery Contract is registered. |
-| `VERIFY` | An active delivery exists, and every acceptance criterion has a passing, criterion-linked evidence row carrying proof. |
+| `VERIFY` | An active delivery exists, and every acceptance criterion has a passing, criterion-linked evidence row that Agent Team observed and that carries proof. |
 | `REVIEW` | An independent reviewer handoff completed over the implementation's scope; no critical or high findings. |
 | `ACCEPT` | Same as `VERIFY`, plus no low-confidence assumption left open, plus traceable decisions, plus `CLAIM ≤ EVIDENCE`. |
 | `DELIVER` | A passing `ACCEPT`, no pending approval, and a delivery contract whose digest still matches. |
@@ -168,8 +168,10 @@ opencode service restart
 unpinned installs forward. Exact npm versions and full Git commit hashes stay
 pinned; unpinned Git and npm plugins are checked for updates on restart.
 
-**Requirements:** Node.js 22 or newer, and an OpenCode 2.x host with at least
-one model connected. Agent Team pins no model and will never substitute one.
+**Requirements:** Node.js 22 or newer, and an OpenCode **2.2.0 or newer** host
+with at least one model connected. Older hosts are refused with one sentence;
+Agent Team does not degrade to a prompt-packet fallback. The plugin pins no
+model and will never substitute one.
 
 ## Quick start
 
@@ -183,7 +185,7 @@ Then, in the session:
 ```text
 /agent-team/setup --apply --scope project --set-default
 /agent-team/doctor
-/agent-team/start Ship a dark-mode toggle to the settings screen
+Ship a dark-mode toggle to the settings screen
 ```
 
 `/agent-team/setup` is explicit and project-scoped by default. With `--apply` it
@@ -231,68 +233,47 @@ it comes back on the next global installation.
 | `--leader-title "..."` | Names the team leader in the agent picker. It must be a single line that keeps the agent file readable; a title that would not is refused and nothing is written. |
 | `--update` | Refreshes the files that are already installed and managed. It does not create the files a newer version of the plugin introduced. |
 
-Then drive the loop:
+Then talk to the leader:
 
 ```text
-/agent-team/start       INTENT      — state the outcome, actors, constraints, acceptance
-/agent-team/discover    DISCOVER    — delegate read-only discovery; classify what is verified
-/agent-team/thesis      FRAME       — the product thesis: for whom, what value, versus what
-/agent-team/decide      DECIDE      — assumptions first, then a Decision Record with options
-/agent-team/plan        PLAN        — exactly one active Delivery Contract
-/agent-team/execute     EXECUTE     — decompose, delegate, build; never mark PASS
-/agent-team/review      REVIEW      — independent adversarial review
-/agent-team/deliver     DELIVER     — evaluate and promote the verified artifact
+Ship a dark-mode toggle to the settings screen.
+Fix the crash when the board has no title.
+Where does this stand?
+Why did we choose the queue over the webhook?
 ```
 
-Ask the system about itself at any point:
+The leader classifies the request (`fix`, `change`, or `decision`), registers
+the delivery, launches the specialists that request needs, reads their
+recorded reports, and reports a verdict. Ask the leader about status or
+rationale in the same conversation; those are not separate commands.
+
+Operator checks remain available:
 
 ```text
-/agent-team/status      — verdict first, then phase, gate, evidence, risks
-/agent-team/why         — the recorded rationale behind a decision
 /agent-team/guard       — the guardrails currently in force, and how to change them
-/agent-team/decisions   — available decision models, thresholds in force, judgements recorded
-/agent-team/export      — the sanitized bundles the ledger can produce
 /agent-team/doctor      — preflight: host, plugin, models, tools, storage
 ```
 
 These are questions you can ask at any point, whatever phase the engagement is
-in. The [Commands](#commands) section below splits all fifteen into the ones
-that drive the loop and the ones that answer directly.
+in. The [Commands](#commands) section below lists the three operator commands;
+the loop itself is the leader's behavior, not a menu.
 
 ## Commands
 
-Fifteen commands, registered with the host.
-
-**The loop** — these re-enter the session with a structured prompt:
-
-| Command | Phase | What it does |
-|---|---|---|
-| `/agent-team/start` | INTENT | Initializes or resumes the engagement; extracts outcome, actors, constraints, non-goals and acceptance; records safe assumptions. |
-| `/agent-team/discover` | DISCOVER | Delegates discovery to `team-leader/explorer`; classifies every conclusion as `VERIFIED` / `USER_STATED` / `OBSERVED_PATTERN` / `INFERENCE` / `PROPOSAL` / `UNKNOWN`. |
-| `/agent-team/thesis` | FRAME | Delegates to `team-leader/product`; produces the thesis, the non-goals, the riskiest assumptions and the first proof. |
-| `/agent-team/decide` | DECIDE | Records the assumptions behind a choice first, then a Decision Record with 2–4 options, trade-offs, reversibility and blast radius. `--critical` runs the architect and security lenses in parallel. |
-| `/agent-team/plan` | PLAN | Registers exactly one active Delivery Contract: scope, acceptance criteria, validation steps, proof and rollback. |
-| `/agent-team/execute` | EXECUTE | Decomposes the delivery into bounded units and launches every independent unit of the wave in parallel. |
-| `/agent-team/review` | REVIEW | Delegates to an independent `team-leader/reviewer` with the matching review skill; runs `team-leader/security` in parallel on risk triggers. |
-| `/agent-team/deliver` | DELIVER | Delegates to `team-leader/release`: pins the artifact identity, confirms the delivered artifact equals the verified one, then promotes autonomously. |
-| `/agent-team/why` | — | Explains the current decision from the recorded rationale, alternatives, evidence and later changes. Never reconstructs private chain-of-thought. |
-
-**Lifecycle** — these execute inside the plugin and answer in the session:
+Three operator commands. The phase loop is not a command menu: the person
+talks to the leader, and the leader classifies, books, and reports.
 
 | Command | What it does |
 |---|---|
 | `/agent-team/setup` | Plans, applies or updates the native agent files and the project config. |
-| `/agent-team/doctor` | Twelve preflight checks: host version, host API surface, plugin version, autonomy policy, model catalog, decision models, reasoning effort, text generation, tool registration, structured output, native specialists, storage. |
-| `/agent-team/status` | Verdict-first answer from the state projection. Never dumps the raw event log. |
-| `/agent-team/guard` | Shows or edits guardrails. The only source of authorization prompts. `--add`, `--remove`, `--clear`, `--mode`. |
-| `/agent-team/decisions` | Lists the decision models the host exposes, the thresholds in force and the judgement rows recorded. |
-| `/agent-team/export` | Lists the sanitized bundles the ledger can produce (status, decision-log, evidence, delivery-readiness, retrospective). Bundle generation is not implemented yet — the command reports the names and writes nothing. |
+| `/agent-team/doctor` | Preflight: host version, host API surface, team runtime, plugin version, autonomy policy, model catalog, decision models, reasoning effort, text generation, tool registration, structured output, native specialists, storage. |
+| `/agent-team/guard` | Shows or edits guardrails and promotion authorization. `--add`, `--remove`, `--clear`, `--mode`, `--allow-promotion`, `--no-promotion`. |
 
 ## Tools
 
-Nine tools, registered under the `agent_team` namespace. Every input schema is
+Ten tools, registered under the `agent_team` namespace. Every input schema is
 **closed** (`additionalProperties: false`) and validated with Zod; a test asserts
-the closure of all nine and pins the declared enums to the canonical domain
+the closure of all ten and pins the declared enums to the canonical domain
 enums.
 
 | Tool | Purpose |
@@ -303,7 +284,8 @@ enums.
 | `agent_team_submit_evidence` | Submit criterion-linked evidence. A `pass` requires an artifact reference, a command or a digest. |
 | `agent_team_evaluate_gate` | Evaluate one of the seven gates **from ledger state**. The result is computed, never chosen. |
 | `agent_team_request_approval` | Open or resolve a scoped, expiring approval. Only needed when a guardrail fires. |
-| `agent_team_handoff` | Prepare, complete or cancel a bounded specialist handoff. `prepareWave` books a whole wave in one call and one revision. |
+| `agent_team_handoff` | Launch a wave: one child session per unit, bound to the leader, the role, and the allowed scope. A prompt packet is not a handoff. |
+| `agent_team_report` | The specialist exit. Only the launched session may call it; the plugin records the result. |
 | `agent_team_define_delivery` | Register the active Delivery Contract. Exactly one delivery is active at a time. |
 | `agent_team_evaluate_decision` | Ask a decision model typed questions about a piece of evidence and get a calibrated verdict. |
 
@@ -385,7 +367,7 @@ prompt-injection obedience and specialist-created `team-leader/*` trees are
 
 | Setting | Effect |
 |---|---|
-| `autonomy.mode: "yolo"` *(default)* | ALLOW baseline, including external, destructive and production actions. Nothing is asked. |
+| `autonomy.mode: "yolo"` *(default)* | ALLOW baseline for local, external, destructive, and production actions. Promotion is the exception: push, tag, publish, and deploy are denied until `allowPromotion` is recorded. |
 | `autonomy.askBefore: ["deploy production"]` | Matching actions require explicit authorization. Plain text or regex, matched case-insensitively against `"<action> <resources>"`. |
 | `autonomy.mode: "guarded"` | Legacy opt-in: ask before external, destructive and outside-delivery actions. |
 | `orchestration.maxParallelSpecialists` *(default `6`)* | How many specialists may run at the same time. |
@@ -521,10 +503,9 @@ your behalf.
 
 | Host line | Supported | Notes |
 |---|---|---|
-| OpenCode `2.0.x` | yes | The baseline. `@opencode/plugin >= 2.0.10` |
-| OpenCode `2.1.x` | yes | Adds `ctx.credential`; the plugin does not depend on it |
-| OpenCode `2.2.x` | yes | Moves the generation API to `ctx.experimental.generate`; the plugin resolves it by feature detection, so it works on all three lines |
-| Anything else | degraded | `/agent-team/doctor` reports the detected version and marks it `DEGRADED`. The plugin does not brick a future host. |
+| OpenCode `2.2.0`+ | yes | The floor. The team runtime needs `session.create`, the decision API, and session instruction entries. |
+| OpenCode `2.0.x`, `2.1.x` | no | The preflight fails and the first leader turn tells the person to update. There is no prompt-packet fallback. |
+| A future host line | degraded | Version-eligible at 2.2.0+; a missing required surface still refuses launch, and the doctor names it. |
 
 The plugin uses `@opencode/plugin` at runtime only for `Plugin.define`, which is
 the identity function on every supported line; the only other import from it is
@@ -546,13 +527,13 @@ Stated plainly, because a README that lists only strengths is not useful.
 
 | Surface | How it is verified |
 |---|---|
-| Tool inputs are closed and their enums are canonical | A test asserts closure for all 9 tools and pins the declared enums — role, gate, evidence kind, work status — to the canonical domain enums |
+| Tool inputs are closed and their enums are canonical | A test asserts closure for all 10 tools and pins the declared enums — role, gate, evidence kind, work status — to the canonical domain enums |
 | The authority matrix | Unit tests over every rule, including that a rule which throws fails closed to `DENY` |
-| The gate algebra | Unit tests over pass/fail/partial/skipped/waived/blocked, the claim-strength check and decision traceability |
+| The gate algebra | Unit tests over pass/fail/partial/skipped/waived/blocked, the observed-evidence rule, the criterion-kind minimum and decision traceability |
 | The ledger | Real filesystems: hash chain, tamper detection, atomic writes, redaction, the lock timeout, concurrent appends |
 | Path containment | Real symlink and traversal tests |
 | Handoff scope enforcement | A tool call is refused when it leaves the handoff's scope |
-| The host compatibility matrix | `npm run compat:check` and a CI matrix build and test the plugin against `@opencode/plugin` 2.0.10, 2.1.4 and 2.2.0 |
+| The host compatibility matrix | `npm run compat:check` and a CI build and test the plugin against `@opencode/plugin` 2.2.0 |
 | The bench case definitions | Dry mode validates every case and fails on an unknown invariant name |
 | The published JSON Schemas | A test regenerates them from the Zod source and fails on drift |
 | Coverage | Enforced thresholds: 98% statements, 98% lines, 98% functions, 87% branches. Below that, `npm run verify` fails. |
@@ -592,7 +573,7 @@ source, so a schema can never quietly stop describing the ledger.
 npm ci
 npm run verify          # typecheck → test:coverage → bench → pack:check. The gate.
 npm run schemas:generate # after any Zod schema change
-npm run compat:check    # builds and tests against SDK 2.0.10, 2.1.4 and 2.2.0
+npm run compat:check    # builds and tests against SDK 2.2.0
 ```
 
 `npm run verify` is the whole definition of done. It is the same gate CI runs.

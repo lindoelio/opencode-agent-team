@@ -38,7 +38,7 @@ describe.skipIf(!E2E_RUNNABLE)("team leader end to end (real model)", () => {
 
       const state = ledger(ws);
       expect(state).not.toBeNull();
-      expect(state!.schemaVersion).toBe(2);
+      expect(state!.schemaVersion).toBe(3);
 
       // the delivery is registered and complete
       const delivery = state!.activeDelivery;

@@ -37,11 +37,11 @@ Two commands need network access on first use because they shell out to `npx tsx
 (`tsx` is not a project dependency): `npm run schemas:generate` and
 `npm run compat:check`. `npm run bench` falls back to the same path.
 
-`npm run compat:check` is slow — it installs three SDK versions into temporary
-directories and runs typecheck plus the unit and integration suites against each.
+`npm run compat:check` is slow — it installs the supported SDK into a temporary
+directory and runs typecheck plus the unit and integration suites against it.
 Run it before changing anything that touches the OpenCode plugin API. The CI
 `verify` job does not run it, but the `sdk-matrix` job performs the equivalent
-per-SDK typecheck and test.
+typecheck and test.
 
 ## Repository structure
 

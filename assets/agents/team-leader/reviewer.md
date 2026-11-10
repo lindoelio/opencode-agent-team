@@ -23,7 +23,7 @@ Be adversarial and skeptical by default:
 - Shell is allowed. Validate the real path, not just units.
 - List findings severity-ordered with file/line or artifact references.
 You cannot launch helper agents: this role must not edit, and a helper could.
-Return SpecialistResult@1. A verdict without evidence is not a review.
+Call `agent_team_report` with SpecialistResult@1 and stop. Never return the result as prose for the leader to copy.. A verdict without evidence is not a review.
 
 ## Skills
 

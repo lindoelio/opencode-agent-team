@@ -2,67 +2,64 @@ import { describe, expect, it } from "vitest";
 import {
   describeHostCapabilities,
   hostHasRequiredSurface,
+  hostVersionAtLeast,
   hostVersionSupport,
+  MINIMUM_HOST_VERSION,
   parseHostVersion,
   resolveDecisionGenerator,
+  resolveSessionLauncher,
+  resolveShellSurface,
   resolveTextGenerator,
   SUPPORTED_HOST_LINES,
   SUPPORTED_SDK_RANGE,
   UnsupportedHostError,
+  UPDATE_HOST_MESSAGE,
 } from "../../src/compat/host.js";
 
 /**
- * The plugin supports the OpenCode 2.0.x, 2.1.x and 2.2.x lines. The one
- * API that changed across them is the generation surface: `ctx.generate` is
- * the full API on 2.0.x/2.1.x and deprecated on 2.2.x, where
- * `ctx.experimental.generate` is the full API. The plugin resolves it by
- * feature detection, never by version number.
+ * The plugin requires OpenCode 2.2.0 or newer. The version is one signal; the
+ * child-session surface is the one the team runtime actually needs, so it is
+ * detected rather than assumed.
  */
 
-function ctxFor(line: "2.0" | "2.1" | "2.2"): unknown {
+function ctxFor(line: "2.2" | "newer"): unknown {
   const text = async (input: unknown) => ({ text: `ok:${JSON.stringify(input)}` });
   if (line === "2.2") {
     return { experimental: { generate: { text } }, generate: { text: async () => ({ text: "deprecated" }) } };
   }
-  return { generate: { text } };
+  return { experimental: { generate: { text } } };
 }
 
 describe("host compatibility", () => {
-  it("classifies every supported host line as supported", () => {
-    expect(hostVersionSupport("2.0.10")).toBe("supported");
-    expect(hostVersionSupport("2.0.32")).toBe("supported");
-    expect(hostVersionSupport("2.1.0")).toBe("supported");
-    expect(hostVersionSupport("2.1.4")).toBe("supported");
+  it("accepts 2.2.0 and every newer version", () => {
     expect(hostVersionSupport("2.2.0")).toBe("supported");
+    expect(hostVersionSupport("2.2.7")).toBe("supported");
+    expect(hostVersionSupport("2.3.0")).toBe("supported");
+    expect(hostVersionSupport("3.0.0")).toBe("supported");
+    expect(hostVersionAtLeast("2.2.0")).toBe(true);
   });
 
-  it("classifies an unsupported or unparsable version honestly", () => {
+  it("rejects every version below 2.2.0", () => {
+    expect(hostVersionSupport("2.0.10")).toBe("unsupported");
+    expect(hostVersionSupport("2.1.4")).toBe("unsupported");
     expect(hostVersionSupport("1.19.5")).toBe("unsupported");
-    expect(hostVersionSupport("2.3.0")).toBe("unsupported");
-    expect(hostVersionSupport("3.0.0")).toBe("unsupported");
     expect(hostVersionSupport("unknown")).toBe("unknown");
     expect(hostVersionSupport("")).toBe("unknown");
   });
 
   it("parses a version with a leading v and a suffix", () => {
-    expect(parseHostVersion("v2.1.4")).toMatchObject({ major: 2, minor: 1, patch: 4, support: "supported" });
-    expect(parseHostVersion("2.2.0-beta.1")).toMatchObject({ major: 2, minor: 2, patch: 0 });
+    expect(parseHostVersion("v2.1.4")).toMatchObject({ major: 2, minor: 1, patch: 4, support: "unsupported" });
+    expect(parseHostVersion("2.2.0-beta.1")).toMatchObject({ major: 2, minor: 2, patch: 0, support: "supported" });
   });
 
-  it("declares the supported lines and the SDK range", () => {
-    expect([...SUPPORTED_HOST_LINES]).toEqual(["2.0", "2.1", "2.2"]);
-    expect(SUPPORTED_SDK_RANGE).toBe(">=2.0.10 <2.3.0");
+  it("declares the floor and the SDK range", () => {
+    expect([...SUPPORTED_HOST_LINES]).toEqual(["2.2"]);
+    expect(MINIMUM_HOST_VERSION).toBe("2.2.0");
+    expect(SUPPORTED_SDK_RANGE).toBe(">=2.2.0 <2.3.0");
+    expect(UPDATE_HOST_MESSAGE).toContain("2.2.0");
   });
 
-  it("resolves the generator on 2.0.x and 2.1.x", async () => {
-    for (const line of ["2.0", "2.1"] as const) {
-      const generator = resolveTextGenerator(ctxFor(line));
-      const result = await generator.text({ prompt: "hi" });
-      expect(String((result as { text: string }).text)).toContain("ok:");
-    }
-  });
-
-  it("prefers experimental.generate on 2.2.x over the deprecated ctx.generate", async () => {
+  it("prefers experimental.generate and falls back to the deprecated surface", async () => {
     const generator = resolveTextGenerator(ctxFor("2.2"));
     const result = await generator.text({ prompt: "hi" });
     expect(String((result as { text: string }).text)).toContain("ok:");
@@ -74,12 +71,27 @@ describe("host compatibility", () => {
     expect(() => resolveTextGenerator({ experimental: { generate: {} } })).toThrow(/no text-generation surface/);
   });
 
+  it("resolves the child-session surface by feature detection", () => {
+    const create = async () => ({});
+    const prompt = async () => ({});
+    expect(resolveSessionLauncher({ session: { create, prompt } }).available).toBe(true);
+    expect(resolveSessionLauncher({ session: { create } }).available).toBe(false);
+    expect(resolveSessionLauncher({ session: { prompt } }).available).toBe(false);
+    expect(resolveSessionLauncher({}).available).toBe(false);
+  });
+
+  it("resolves a shell surface only when the host exposes one", () => {
+    expect(resolveShellSurface({ session: { shell: async () => ({}) } }).available).toBe(true);
+    expect(resolveShellSurface({ shell: { run: async () => ({}) } }).available).toBe(true);
+    expect(resolveShellSurface({}).available).toBe(false);
+  });
+
   it("reports the host API surface and detects a missing required surface", () => {
     const complete = {
       experimental: { generate: {} },
       credential: {},
       permission: { assert: () => {} },
-      session: { hook: () => {} },
+      session: { hook: () => {}, create: () => {} },
       tool: { hook: () => {} },
       command: { transform: () => {} },
       skill: { transform: () => {} },
@@ -93,6 +105,21 @@ describe("host compatibility", () => {
     const incomplete = { ...complete, storage: undefined };
     expect(hostHasRequiredSurface(incomplete)).toBe(false);
     expect(describeHostCapabilities(incomplete).some((l) => l.includes("MISSING REQUIRED"))).toBe(true);
+  });
+
+  it("fails the required surface when session.create is missing", () => {
+    const noCreate = {
+      experimental: { generate: {} },
+      session: { hook: () => {} },
+      tool: { hook: () => {} },
+      command: { transform: () => {} },
+      skill: { transform: () => {} },
+      storage: {},
+      model: { list: () => {} },
+      agent: { list: () => {} },
+    };
+    expect(hostHasRequiredSurface(noCreate)).toBe(false);
+    expect(describeHostCapabilities(noCreate).some((l) => l.includes("session.create"))).toBe(true);
   });
 
   it("resolves the decision surface when the host exposes one", async () => {
@@ -112,7 +139,7 @@ describe("host compatibility", () => {
   it("never requires the decision surface, so a host without it still passes the preflight", () => {
     const withoutDecisions = {
       experimental: { generate: { text: () => {} } },
-      session: { hook: () => {} },
+      session: { hook: () => {}, create: () => {} },
       tool: { hook: () => {} },
       command: { transform: () => {} },
       skill: { transform: () => {} },

@@ -108,8 +108,15 @@ export const DeliveryRefSchema = z.object({
   /** What it must never touch. */
   prohibitedScope: z.array(z.string()),
   acceptanceCriteria: z.array(z.string()).min(1),
+  /**
+   * The minimum evidence kind each criterion requires, keyed by criterion id.
+   * Absence means any observed non-judgment kind may satisfy it.
+   */
+  criterionKinds: z.record(z.string(), z.enum(["test", "runtime", "visual", "source", "review", "release", "document", "metric"])).optional(),
   /** How the delivery is checked: commands, checks, calls, human sign-offs. */
   validationSteps: z.array(z.string()),
+  /** The files in the allowed scope at registration, path to digest. */
+  baselineFiles: z.record(z.string(), z.string()).optional(),
   proof: z.array(ProofSchema),
   risks: z.array(z.string()),
   rollback: z.string(),
@@ -142,6 +149,8 @@ export const GateRefSchema = z.object({
    * delivery cannot be quietly changed after it was accepted.
    */
   contractDigest: z.string().optional(),
+  /** The digest of the files in the allowed scope at acceptance. */
+  treeDigest: z.string().optional(),
 });
 export type GateRef = z.infer<typeof GateRefSchema>;
 
@@ -197,6 +206,8 @@ export const EvidenceRefSchema = z.object({
   command: z.string().optional(),
   digest: z.string().optional(),
   observedAt: z.string(),
+  /** True only when Agent Team ran the check through the host. */
+  observed: z.boolean().optional(),
   limitations: z.array(z.string()).default([]),
   judgment: JudgmentBlockSchema.optional(),
 });
@@ -231,7 +242,11 @@ export const HandoffRefSchema = z.object({
   skills: z.array(z.string()).default([]),
   /** Handoff ids that must complete before this one can start. */
   dependsOn: z.array(z.string()).default([]),
-  status: z.enum(["prepared", "completed", "cancelled"]),
+  status: z.enum(["prepared", "running", "completed", "failed", "cancelled"]),
+  /** The child session launched for this booking. Scope and report bind to it. */
+  sessionID: z.string().optional(),
+  /** The leader session that booked it, so a settle can notify it. */
+  parentSessionID: z.string().optional(),
   result: z.unknown().optional(),
 });
 export type HandoffRef = z.infer<typeof HandoffRefSchema>;
@@ -271,9 +286,24 @@ export const SpecialistResultSchema = z
   .strict();
 export type SpecialistResult = z.infer<typeof SpecialistResultSchema>;
 
+export const EngagementClassSchema = z.enum(["fix", "change", "decision"]);
+export type EngagementClass = z.infer<typeof EngagementClassSchema>;
+
 export const AgentTeamProjectStateSchema = z.object({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.literal(3),
   revision: z.number().int().min(0),
+  /** The path the engagement takes. Absence after migration means `change`. */
+  engagementClass: EngagementClassSchema.optional(),
+  /** The last route the plugin recorded for this engagement. */
+  route: z
+    .object({
+      engagementClass: z.enum(["fix", "change", "decision", "clarify"]),
+      namesFileAndSymptom: z.boolean(),
+      riskSignal: z.boolean(),
+      model: z.string().optional(),
+      reason: z.string().optional(),
+    })
+    .optional(),
   project: z.object({
     id: z.string().min(1),
     canonicalDirectoryHash: z.string().min(1),
@@ -304,6 +334,11 @@ export const AgentTeamProjectStateSchema = z.object({
   guardrails: z.array(z.string()).default([]),
   /** State-level override for autonomy. Falls back to plugin options (`yolo` by default). */
   autonomyMode: z.enum(["yolo", "guarded"]).optional(),
+  /**
+   * The operator's recorded permission to push, tag, publish, or deploy.
+   * Absence means false. An ask-before guardrail does not authorize promotion.
+   */
+  allowPromotion: z.boolean().optional(),
   assumptions: z.array(AssumptionRefSchema),
   decisions: z.array(DecisionRefSchema),
   activeDelivery: DeliveryRefSchema.optional(),
@@ -423,6 +458,7 @@ export const DefineDeliveryInputSchema = z
     allowedScope: z.array(z.string()).min(1),
     prohibitedScope: z.array(z.string()).optional(),
     acceptanceCriteria: z.array(z.string()).min(1),
+    criterionKinds: z.record(z.string(), z.enum(["test", "runtime", "visual", "source", "review", "release", "document", "metric"])).optional(),
     validationSteps: z.array(z.string()).min(1),
     proof: z.array(ProofSchema).optional(),
     risks: z.array(z.string()).optional(),
@@ -515,7 +551,7 @@ export const EvaluateDecisionInputSchema = z
 export const EvaluateGateInputSchema = z
   .object({
     gate: z.enum(["INTENT", "DISCOVERY", "PLAN", "VERIFY", "REVIEW", "ACCEPT", "DELIVER"]),
-    claim: z.string().min(1),
+    claim: z.string().min(1).optional(),
     expectedRevision: z.number().int().min(0),
   })
   .strict();
@@ -601,6 +637,14 @@ export const HandoffPrepareWaveInputSchema = z
   })
   .strict();
 
+export const HandoffLaunchInputSchema = z
+  .object({
+    action: z.literal("launch"),
+    expectedRevision: z.number().int().min(0),
+    units: z.array(HandoffUnitSchema).min(1),
+  })
+  .strict();
+
 export const HandoffCompleteInputSchema = z
   .object({
     action: z.literal("complete"),
@@ -620,6 +664,7 @@ export const HandoffCancelInputSchema = z
 export const HandoffInputSchema = z.union([
   HandoffPrepareInputSchema,
   HandoffPrepareWaveInputSchema,
+  HandoffLaunchInputSchema,
   HandoffCompleteInputSchema,
   HandoffCancelInputSchema,
 ]);

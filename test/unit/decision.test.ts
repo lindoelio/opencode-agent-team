@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { chooseDecisionModel, discoverDecisionModels } from "../../src/decision/catalog.js";
 import { buildDecisionRequest, normaliseDecisionResult, validateDecisionQuestions } from "../../src/decision/protocol.js";
 import { screenDecisionState } from "../../src/decision/screen.js";
-import { renderDecisionListing } from "../../src/decision/catalog.js";
 import { SpecialistResultSchema } from "../../src/domain/schemas.js";
 import {
   computeVerdict,
@@ -280,32 +279,6 @@ describe("the specialist result", () => {
       recommended_next_action: "accept",
     });
     expect(parsed.decisions).toBeUndefined();
-  });
-});
-
-describe("the decision listing", () => {
-  it("lists the models with their price, context and connection state", () => {
-    const report = {
-      surface: true,
-      models: [
-        { providerID: "p", id: "jev", ref: "p/jev", name: "Jev", costPerMillionInput: 0.042, contextLimit: 32000, enabled: true, status: "active" },
-      ],
-      connected: new Set(["p"]),
-      judgementRows: 2,
-    };
-    const text = renderDecisionListing(report, "probability >= 0.85, confidence >= 0.7");
-    expect(text).toContain("Decision surface: available");
-    expect(text).toContain("p/jev");
-    expect(text).toContain("$0.042/Mtok in");
-    expect(text).toContain("32000 tokens");
-    expect(text).toContain("connected");
-    expect(text).toContain("never approves a criterion");
-  });
-
-  it("says so when there is no decision model at all", () => {
-    const text = renderDecisionListing({ surface: false, models: [], connected: new Set(), judgementRows: 0 }, "probability >= 0.85");
-    expect(text).toContain("unavailable");
-    expect(text).toContain("(none");
   });
 });
 

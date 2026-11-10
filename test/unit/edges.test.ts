@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathAllowed, pathInScope, pathProhibited, scopeOverlaps } from "../../src/domain/scope.js";
 import { evaluateAcceptGate, independentReviewCheck } from "../../src/domain/gates.js";
-import { forbiddenClaim, claimSupported, evidenceSatisfiesCriterion } from "../../src/domain/evidence.js";
+import { kindMeets, evidenceSatisfiesCriterion } from "../../src/domain/evidence.js";
 import { validatePhaseTransition, canTransitionStatus, statusForPhase } from "../../src/domain/state-machine.js";
 import { risksFromResult, validateResult } from "../../src/domain/handoff.js";
 import { parseOptions } from "../../src/options.js";
@@ -55,23 +55,22 @@ describe("scope matching, the awkward cases", () => {
 
 describe("the gate's claim and traceability checks", () => {
   const evidence = [
-    { id: "E", criterionId: "AC-1", kind: "test" as const, status: "pass" as const, summary: "s", command: "npm test", observedAt: "t", limitations: [] },
+    { id: "E", criterionId: "AC-1", kind: "test" as const, status: "pass" as const, summary: "s", command: "npm test", observedAt: "t", observed: true, limitations: [] },
   ];
 
-  it("refuses a claim the evidence kind cannot support", () => {
+  it("refuses evidence weaker than the declared kind", () => {
     const result = evaluateAcceptGate({
       criteria: ["AC-1"],
       evidence,
       findings: [],
-      claim: "production ready",
+      criterionKinds: { "AC-1": "runtime" },
     });
     expect(result.result).toBe("FAIL");
-    expect(result.missing).toContain("claim-evidence-strength");
-    expect(result.nextAction).toContain("Weaken the claim");
+    expect(result.missing).toContain("AC-1");
   });
 
-  it("accepts a claim the evidence kind can support", () => {
-    const result = evaluateAcceptGate({ criteria: ["AC-1"], evidence, findings: [], claim: "the flow works" });
+  it("accepts evidence that meets the declared kind", () => {
+    const result = evaluateAcceptGate({ criteria: ["AC-1"], evidence, findings: [], criterionKinds: { "AC-1": "test" } });
     expect(result.result).toBe("PASS");
   });
 
@@ -89,7 +88,7 @@ describe("the gate's claim and traceability checks", () => {
   it("accepts a partial row only when partial evidence is allowed", () => {
     const partial = [{ ...evidence[0]!, status: "partial" as const }];
     expect(evaluateAcceptGate({ criteria: ["AC-1"], evidence: partial, findings: [] }).result).toBe("FAIL");
-    expect(evaluateAcceptGate({ criteria: ["AC-1"], evidence: partial, findings: [], acceptPartial: true }).result).toBe("PASS");
+    expect(evaluateAcceptGate({ criteria: ["AC-1"], evidence: partial, findings: [], acceptPartial: true }).result).toBe("FAIL");
   });
 
   it("blocks when a blocker is present and nothing has failed", () => {
@@ -100,16 +99,18 @@ describe("the gate's claim and traceability checks", () => {
 });
 
 describe("the evidence strength helpers", () => {
-  it("names the reason a claim is forbidden for a kind", () => {
-    expect(forbiddenClaim("test", "the service is end to end healthy")).toBeDefined();
-    expect(forbiddenClaim("test", "the flow works")).toBeUndefined();
-    expect(claimSupported("test", "the flow works").ok).toBe(false);
-    expect(claimSupported("test", "covered units pass").ok).toBe(true);
+  it("keeps visual and test incomparable and lets runtime meet test", () => {
+    expect(kindMeets("test", "test")).toBe(true);
+    expect(kindMeets("test", "visual")).toBe(false);
+    expect(kindMeets("visual", "test")).toBe(false);
+    expect(kindMeets("runtime", "test")).toBe(true);
+    expect(kindMeets("judgment", "test")).toBe(false);
+    expect(kindMeets("release", "runtime")).toBe(true);
   });
 
   it("requires proof for a passing evidence row", () => {
     expect(evidenceSatisfiesCriterion({ id: "E", criterionId: "C", kind: "test", status: "pass", summary: "s", observedAt: "t", limitations: [] })).toBe(false);
-    expect(evidenceSatisfiesCriterion({ id: "E", criterionId: "C", kind: "test", status: "pass", summary: "s", digest: "d", observedAt: "t", limitations: [] })).toBe(true);
+    expect(evidenceSatisfiesCriterion({ id: "E", criterionId: "C", kind: "test", status: "pass", summary: "s", digest: "d", observedAt: "t", observed: true, limitations: [] })).toBe(true);
   });
 });
 

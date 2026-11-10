@@ -68,20 +68,22 @@ export async function readState(projectRoot: string): Promise<AgentTeamProjectSt
     throw err;
   }
   const parsed = JSON.parse(raw) as { schemaVersion?: number };
-  if (parsed?.schemaVersion === 1) return migrateStateFile(projectRoot, raw);
+  if (parsed?.schemaVersion === 1 || parsed?.schemaVersion === 2) return migrateStateFile(projectRoot, raw);
   return AgentTeamProjectStateSchema.parse(parsed);
 }
 
 /**
- * Migrates a v1 state file to v2 in place. The pre-migration file is backed
- * up first so a failed upgrade never destroys the previous ledger state.
+ * Migrates an older state file to the current schema in place. The
+ * pre-migration file is backed up first so a failed upgrade never destroys the
+ * previous ledger state.
  */
 async function migrateStateFile(projectRoot: string, raw: string): Promise<AgentTeamProjectStateV2> {
   const root = path.resolve(projectRoot);
   await ensureLayout(root);
+  const sourceVersion = (JSON.parse(raw) as { schemaVersion?: number }).schemaVersion ?? 1;
   const validated = AgentTeamProjectStateSchema.parse(migrateUnknown(JSON.parse(raw)));
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const backup = path.join(agentTeamDir(root), "setup-backups", stamp, "state.v1.json");
+  const backup = path.join(agentTeamDir(root), "setup-backups", stamp, `state.v${sourceVersion}.json`);
   await fs.promises.mkdir(path.dirname(backup), { recursive: true });
   await atomicWriteFile(backup, raw);
   await atomicWriteFile(statePath(root), JSON.stringify(validated, null, 2));
@@ -150,6 +152,8 @@ export async function initializeState(input: {
   constraints?: string[];
   nonGoals?: string[];
   acceptance?: string[];
+  engagementClass?: "fix" | "change" | "decision";
+  route?: { engagementClass: "fix" | "change" | "decision" | "clarify"; namesFileAndSymptom: boolean; riskSignal: boolean; model?: string; reason?: string };
 }): Promise<AgentTeamProjectStateV2> {
   const root = path.resolve(input.projectRoot);
   return withLedgerLock(`agent-team:${root}`, async () => {
@@ -159,7 +163,9 @@ export async function initializeState(input: {
     const now = new Date().toISOString();
     const { engagementId } = await import("../util/ids.js");
     const state: AgentTeamProjectStateV2 = {
-      schemaVersion: 2,
+      schemaVersion: 3,
+      engagementClass: input.engagementClass ?? "change",
+      ...(input.route ? { route: input.route } : {}),
       revision: 0,
       project: { id: `PRJ-${sha256Hex(root).slice(0, 8).toUpperCase()}`, canonicalDirectoryHash: sha256Hex(root) },
       engagement: { id: engagementId(), createdAt: now, updatedAt: now, status: "DRAFT", phase: "INTENT" },
@@ -175,7 +181,7 @@ export async function initializeState(input: {
       evidence: [],
       approvals: [],
       handoffs: [],
-      nextAction: { description: "Run /agent-team/discover to inventory the current state", owner: "team-leader" },
+      nextAction: { description: "State the outcome to the leader", owner: "team-leader" },
     };
     // The initial projection is written here rather than through
     // `appendEvent`, so it needs the redactor of its own. Without it, a secret

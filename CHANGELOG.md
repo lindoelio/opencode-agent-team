@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-10
+
+### Added
+
+- **A real team runtime.** `agent_team_handoff` with `action: "launch"` creates
+  one child session per specialist, bound to the leader, the role, and the
+  allowed scope. A prompt packet is no longer a handoff.
+- **`agent_team_report`.** The launched session reports `SpecialistResult@1`
+  and the plugin records it. A session that ends without a report is `failed`,
+  not a completed review.
+- **Observed evidence.** A passing criterion is recorded only after Agent Team
+  runs the declared check through the host and stores the exit code and output
+  digest. A typed `pass` is refused. A host without a shell surface leaves the
+  criterion missing and the preflight reports `DEGRADED`.
+- **Engagement classes.** `fix`, `change`, and `decision` select the phase
+  path. The person states an outcome; the leader classifies it.
+- **Transparent decision routing.** The plugin routes the admitted prompt with
+  the connected decision model, preferring a non-free Jev model. Silence is not
+  a negative answer and the route never approves a criterion.
+- **Promotion authorization.** `--allow-promotion` on `/agent-team/guard` is
+  the only way push, tag, publish, or deploy is permitted.
+- **Schema 3.** The engagement class, session id, observed flag, file digest,
+  and promotion flag. Older files migrate with a backup; a prior pass stays
+  unobserved.
+
+### Changed
+
+- **OpenCode 2.2.0 is the floor.** 2.0 and 2.1 fail the preflight and receive
+  one update sentence. There is no prompt-packet fallback.
+- **Three commands.** `setup`, `doctor`, and `guard` remain. The twelve phase
+  commands are not registered; the loop is leader behavior.
+- **Acceptance is the files.** `ACCEPT` records the digest of the allowed
+  scope and the contract; `DELIVER` refuses either one changed.
+- **Review covers every handoff and every changed path.** A reviewer that
+  covers one but not the other fails.
+
+### Fixed
+
+- **The leader could edit product code and approve its own delivery.** Leader
+  edits and shell are denied while a delivery is active.
+- **A promotion ask could become an allow.** An ask-before guardrail and a
+  one-time permission reply no longer authorize promotion.
+- **A free-text claim decided evidence strength.** The criterion declares its
+  minimum kind; visual and test remain incomparable.
+- **`prepareWave` booked work that never ran.** It now refuses and names
+  `launch`.
+
 ## [0.6.0] - 2026-10-31
 
 ### Added

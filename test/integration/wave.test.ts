@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { createRuntime, type AgentTeamRuntime } from "../../src/runtime.js";
 import { executeState } from "../../src/tools/state.js";
 import { executeHandoff } from "../../src/tools/handoff.js";
-import { executeEvidence } from "../../src/tools/evidence.js";
+import { recordObservedEvidence } from "../../src/orchestrator/observe.js";
 import { executeGate } from "../../src/tools/gate.js";
 import { readState } from "../../src/ledger/store.js";
 import { project } from "../../src/ledger/projection.js";
@@ -19,15 +19,16 @@ import { project } from "../../src/ledger/projection.js";
 const leader = { sessionID: "sess-1", agent: "team-leader" } as never;
 
 function runtimeFor(root: string): AgentTeamRuntime {
+  let n = 0;
   return createRuntime(
-    { location: { project: { canonical: root } }, options: {} } as never,
+    { location: { project: { canonical: root } }, options: {}, app: { version: "2.2.0" }, session: { create: async () => ({ id: `ses_child_${++n}` }), prompt: async () => ({}) } } as never,
     {
       profile: "public",
       strictEvidence: true,
       projectState: ".agent-team",
       telemetry: false,
       autonomy: { mode: "yolo", askBefore: [] },
-      orchestration: { maxParallelSpecialists: 6 },
+      orchestration: { maxParallelSpecialists: 6, allowedCheckPrefixes: [] },
     },
   );
 }
@@ -51,15 +52,15 @@ const UNIT = {
 };
 
 describe("booking a wave", () => {
-  it("prepares every unit in one call and one revision", async () => {
-    const { runtime } = await freshRuntime();
-    const before = (await readState(path.join(runtime.ctx.location.project!.canonical)))!.revision;
+  it("launches every unit in one call and one revision", async () => {
+    const { runtime, root } = await freshRuntime();
+    const before = (await readState(root))!.revision;
     const out = JSON.parse(
       (
         await executeHandoff(
           runtime,
           {
-            action: "prepareWave",
+            action: "launch",
             expectedRevision: before,
             units: [
               UNIT,
@@ -71,35 +72,36 @@ describe("booking a wave", () => {
       ).content,
     );
     expect(out.ids).toEqual(["HND-0001", "HND-0002"]);
-    expect(out.packets).toHaveLength(2);
-    expect(out.prompt).toContain("HND-0001");
-    expect(out.prompt).toContain("HND-0002");
-    // one revision bump for the whole wave
+    expect(out.sessions).toHaveLength(2);
+    expect(out.sessions[0].sessionID).toMatch(/^ses_/);
+    expect(out.prompts[0]).toContain("HND-0001");
+    expect(out.prompts[1]).toContain("HND-0002");
     expect(out.revision).toBe(before + 1);
-    expect(out.parallelBudget.inFlight).toBe(2);
+    expect(out.parallelBudget.running).toBe(2);
   });
 
-  it("gives every unit its own id and its role's skills", async () => {
-    const { runtime } = await freshRuntime();
+  it("gives every unit its own session and its role's skills", async () => {
+    const { runtime, root } = await freshRuntime();
     const out = JSON.parse(
       (
         await executeHandoff(
           runtime,
           {
-            action: "prepareWave",
+            action: "launch",
             expectedRevision: 0,
             units: [
               { ...UNIT, skills: ["agent-team-domain-discovery"] },
-              { ...UNIT, role: "worker" as const, objective: "write" },
+              { ...UNIT, role: "worker" as const, objective: "write", allowedScope: ["docs/**"] },
             ],
           },
           leader,
         )
       ).content,
     );
-    expect(out.packets[0].skills).toEqual(["agent-team-domain-discovery"]);
-    // the second unit defaults to the skills its role owns
-    expect(out.packets[1].skills.length).toBeGreaterThan(0);
+    expect(out.sessions[0].sessionID).not.toBe(out.sessions[1].sessionID);
+    const state = await readState(root);
+    expect(state?.handoffs[0]?.skills).toEqual(["agent-team-domain-discovery"]);
+    expect(state?.handoffs[1]?.skills.length).toBeGreaterThan(0);
   });
 
   it("refuses a wave that would exceed the parallel budget", async () => {
@@ -108,7 +110,7 @@ describe("booking a wave", () => {
       executeHandoff(
         runtime,
         {
-          action: "prepareWave",
+          action: "launch",
           expectedRevision: 0,
           units: Array.from({ length: 7 }, (_, i) => ({ ...UNIT, objective: `unit ${i}` })),
         },
@@ -117,35 +119,34 @@ describe("booking a wave", () => {
     ).rejects.toThrow(/parallel specialist budget exhausted/);
   });
 
-  it("counts a wave against the budget together with what is already in flight", async () => {
-    const { runtime } = await freshRuntime();
-    await executeHandoff(runtime, { action: "prepareWave", expectedRevision: 0, units: [UNIT, UNIT, UNIT, UNIT, UNIT] }, leader);
-    // five are in flight; a wave of two would exceed six
+  it("counts a wave against the budget together with what is already running", async () => {
+    const { runtime, root } = await freshRuntime();
+    await executeHandoff(runtime, { action: "launch", expectedRevision: 0, units: [UNIT, UNIT, UNIT, UNIT, UNIT] }, leader);
+    const rev = (await readState(root))!.revision;
     await expect(
-      executeHandoff(runtime, { action: "prepareWave", expectedRevision: 1, units: [UNIT, UNIT] }, leader),
+      executeHandoff(runtime, { action: "launch", expectedRevision: rev, units: [UNIT, UNIT] }, leader),
     ).rejects.toThrow(/parallel specialist budget exhausted/);
-    // a wave of one fits
-    const ok = JSON.parse((await executeHandoff(runtime, { action: "prepareWave", expectedRevision: 1, units: [UNIT] }, leader)).content);
+    const ok = JSON.parse((await executeHandoff(runtime, { action: "launch", expectedRevision: rev, units: [UNIT] }, leader)).content);
     expect(ok.ids).toEqual(["HND-0006"]);
   });
 
-  it("keeps a wave's units in the projection as ready to launch", async () => {
+  it("keeps a running wave in the projection as open", async () => {
     const { runtime, root } = await freshRuntime();
-    await executeHandoff(runtime, { action: "prepareWave", expectedRevision: 0, units: [UNIT, { ...UNIT, role: "worker" as const }] }, leader);
+    await executeHandoff(runtime, { action: "launch", expectedRevision: 0, units: [UNIT, { ...UNIT, role: "worker" as const, allowedScope: ["docs/**"] }] }, leader);
     const state = await readState(root);
     const projection = project(state!);
-    expect(projection.handoffs_ready).toEqual(["HND-0001:explorer", "HND-0002:worker"]);
-    expect(projection.handoffs_blocked).toEqual([]);
+    expect(projection.handoffs_open).toEqual(["HND-0001:explorer", "HND-0002:worker"]);
+    expect(projection.handoffs_ready).toEqual([]);
   });
 
-  it("excludes a cancelled handoff from the in-flight count", async () => {
-    const { runtime } = await freshRuntime();
-    await executeHandoff(runtime, { action: "prepareWave", expectedRevision: 0, units: Array.from({ length: 6 }, (_, i) => ({ ...UNIT, objective: `unit ${i}` })) }, leader);
-    // the budget is full
-    await expect(executeHandoff(runtime, { action: "prepareWave", expectedRevision: 1, units: [UNIT] }, leader)).rejects.toThrow(/budget exhausted/);
-    // cancelling one frees a slot
-    await executeHandoff(runtime, { action: "cancel", expectedRevision: 1, handoffId: "HND-0001", reason: "not needed" }, leader);
-    const ok = JSON.parse((await executeHandoff(runtime, { action: "prepareWave", expectedRevision: 2, units: [UNIT] }, leader)).content);
+  it("excludes a cancelled handoff from the running count", async () => {
+    const { runtime, root } = await freshRuntime();
+    await executeHandoff(runtime, { action: "launch", expectedRevision: 0, units: Array.from({ length: 6 }, (_, i) => ({ ...UNIT, objective: `unit ${i}` })) }, leader);
+    let rev = (await readState(root))!.revision;
+    await expect(executeHandoff(runtime, { action: "launch", expectedRevision: rev, units: [UNIT] }, leader)).rejects.toThrow(/budget exhausted/);
+    await executeHandoff(runtime, { action: "cancel", expectedRevision: rev, handoffId: "HND-0001", reason: "not needed" }, leader);
+    rev = (await readState(root))!.revision;
+    const ok = JSON.parse((await executeHandoff(runtime, { action: "launch", expectedRevision: rev, units: [UNIT] }, leader)).content);
     expect(ok.ids).toEqual(["HND-0007"]);
   });
 
@@ -153,13 +154,13 @@ describe("booking a wave", () => {
     const { runtime } = await freshRuntime();
     const specialist = { sessionID: "s", agent: "team-leader/coder" } as never;
     await expect(
-      executeHandoff(runtime, { action: "prepareWave", expectedRevision: 0, units: [UNIT] }, specialist),
+      executeHandoff(runtime, { action: "launch", expectedRevision: 0, units: [UNIT] }, specialist),
     ).rejects.toThrow(/only team-leader may/);
   });
 
   it("refuses a wave with no units", async () => {
     const { runtime } = await freshRuntime();
-    await expect(executeHandoff(runtime, { action: "prepareWave", expectedRevision: 0, units: [] }, leader)).rejects.toThrow(/invalid handoff input/);
+    await expect(executeHandoff(runtime, { action: "launch", expectedRevision: 0, units: [] }, leader)).rejects.toThrow(/invalid handoff input/);
   });
 });
 
@@ -180,13 +181,17 @@ describe("a delivery cannot change after it was accepted", () => {
   }
 
   async function acceptIt(runtime: AgentTeamRuntime, root: string): Promise<number> {
-    const { readState } = await import("../../src/ledger/store.js");
+    const { readState, storeContext, appendEvent } = await import("../../src/ledger/store.js");
     let rev = (await readState(root))!.revision;
-    await executeEvidence(runtime, { expectedRevision: rev, criterionId: "AC-1", kind: "test", status: "pass", summary: "green", command: "npm test", observedAt: "t" }, leader);
-    rev = (await readState(root))!.revision;
-    await executeHandoff(runtime, { action: "prepare", expectedRevision: rev, role: "reviewer", objective: "review", context: [], allowedScope: ["src/a.ts"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "done" }, leader);
-    rev = (await readState(root))!.revision;
-    await executeHandoff(runtime, { action: "complete", expectedRevision: rev, handoffId: "HND-0001", result: { status: "PASS", summary: "ok", findings: [], risks: [], unknowns: [], recommended_next_action: "accept" } }, leader);
+    await recordObservedEvidence(root, { criterionId: "AC-1", kind: "test", summary: "green", command: "npm test", exitCode: 0, output: "ok" });
+    await appendEvent(storeContext(root, "sess-1", "team-leader"), "handoff.launched", { id: "HND-0001" }, (s) => ({
+      ...s,
+      handoffs: [
+        ...s.handoffs,
+        { id: "HND-0001", role: "coder" as const, objective: "implement", context: [], allowedScope: ["src/a.ts"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "done", skills: [], dependsOn: [], status: "completed" as const, sessionID: "ses_coder", parentSessionID: "sess-1" },
+        { id: "HND-0002", role: "reviewer" as const, objective: "review", context: [], allowedScope: ["src/a.ts"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "done", skills: [], dependsOn: [], status: "completed" as const, sessionID: "ses_reviewer", parentSessionID: "sess-1" },
+      ],
+    }));
     rev = (await readState(root))!.revision;
     const accept = JSON.parse((await executeGate(runtime, { gate: "ACCEPT", claim: "done", expectedRevision: rev }, leader)).content);
     expect(accept.result).toBe("PASS");
@@ -210,6 +215,16 @@ describe("a delivery cannot change after it was accepted", () => {
     const deliver = JSON.parse((await executeGate(runtime, { gate: "DELIVER", claim: "ship", expectedRevision: after }, leader)).content);
     expect(deliver.result).toBe("FAIL");
     expect(deliver.missing).toContain("unchanged-contract");
+  });
+
+  it("refuses to deliver a file tree that changed after ACCEPT", async () => {
+    const { runtime, root } = await acceptedDelivery();
+    const rev = await acceptIt(runtime, root);
+    await fs.promises.mkdir(path.join(root, "src"), { recursive: true });
+    await fs.promises.writeFile(path.join(root, "src", "a.ts"), "changed after acceptance");
+    const deliver = JSON.parse((await executeGate(runtime, { gate: "DELIVER", claim: "ship", expectedRevision: rev }, leader)).content);
+    expect(deliver.result).toBe("FAIL");
+    expect(deliver.missing).toContain("unchanged-artifact");
   });
 
   it("delivers an unchanged contract", async () => {

@@ -7,15 +7,16 @@ import { executeState } from "../../src/tools/state.js";
 import { executeAssumption } from "../../src/tools/assumption.js";
 import { executeDecision } from "../../src/tools/decision.js";
 import { executeDelivery } from "../../src/tools/delivery.js";
-import { executeEvidence } from "../../src/tools/evidence.js";
+import { recordObservedEvidence } from "../../src/orchestrator/observe.js";
+import { executeReport } from "../../src/tools/report.js";
 import { executeHandoff } from "../../src/tools/handoff.js";
 import { AUTHORITY_RULES, classifyAuthority, classifyGuarded } from "../../src/domain/authority.js";
 import { projectRootOf } from "../../src/runtime.js";
 
 function runtimeFor(root: string): AgentTeamRuntime {
   return createRuntime(
-    { location: { project: { canonical: root } }, options: {} } as never,
-    { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false, autonomy: { mode: "yolo", askBefore: [] }, orchestration: { maxParallelSpecialists: 6 } },
+    { location: { project: { canonical: root } }, options: {}, app: { version: "2.2.0" }, session: { create: async () => ({ id: "ses_child" }), prompt: async () => ({}) } } as never,
+    { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false, autonomy: { mode: "yolo", askBefore: [] }, orchestration: { maxParallelSpecialists: 6, allowedCheckPrefixes: [] } },
   );
 }
 
@@ -81,18 +82,13 @@ describe("security: nothing secret reaches the disk", () => {
     expect(doc).not.toContain(SECRET);
   });
 
-  it("keeps an evidence digest readable while still redacting secrets", async () => {
-    const { runtime, root } = await freshRuntime();
-    const out = JSON.parse(
-      (await executeEvidence(
-        runtime,
-        { expectedRevision: 0, criterionId: "AC-1", kind: "test", status: "pass", summary: "green", command: "npm test", observedAt: "2026-01-01" },
-        leader,
-      )).content,
-    );
-    expect(out.digest.length).toBeGreaterThan(0);
-    const doc = await fs.promises.readFile(path.join(root, ".agent-team", "evidence", "EVD-0001.json"), "utf8");
-    expect(doc).toContain(out.digest);
+  it("keeps an observed evidence digest readable while still redacting secrets", async () => {
+    const { root } = await freshRuntime();
+    const out = await recordObservedEvidence(root, { criterionId: "AC-1", kind: "test", summary: "green", command: "npm test", exitCode: 0, output: "ok" });
+    expect(out.digest?.length).toBeGreaterThan(0);
+    const { readState } = await import("../../src/ledger/store.js");
+    const state = await readState(root);
+    expect(state?.evidence.some((e) => e.id === out.id && e.observed === true && e.digest === out.digest)).toBe(true);
   });
 });
 
@@ -136,7 +132,7 @@ describe("security: one orchestrator owns the ledger", () => {
       executeAssumption(runtime, { expectedRevision: 0, statement: "s", basis: "INFERENCE", confidence: "medium", impact: "i" }, specialist),
     ).rejects.toThrow(/only team-leader may/);
     await expect(
-      executeHandoff(runtime, { action: "prepare", expectedRevision: 0, role: "explorer", objective: "o", context: [], allowedScope: ["src/**"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "s" }, specialist),
+      executeHandoff(runtime, { action: "launch", expectedRevision: 0, units: [{ role: "explorer", objective: "o", context: [], allowedScope: ["src/**"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "s" }] }, specialist),
     ).rejects.toThrow(/only team-leader may/);
   });
 
@@ -148,39 +144,35 @@ describe("security: one orchestrator owns the ledger", () => {
 });
 
 describe("security: a specialist result must be well formed", () => {
+  async function running(runtime: AgentTeamRuntime, root: string): Promise<void> {
+    const { storeContext, appendEvent } = await import("../../src/ledger/store.js");
+    await appendEvent(storeContext(root, "sess-1", "team-leader"), "handoff.launched", { id: "HND-0001" }, (s) => ({
+      ...s,
+      handoffs: [...s.handoffs, {
+        id: "HND-0001", role: "explorer" as const, objective: "map", context: [], allowedScope: ["src/**"], prohibitedScope: [],
+        questions: [], requiredEvidence: [], stopCondition: "done", skills: [], dependsOn: [], status: "running" as const,
+        sessionID: "sess-2", parentSessionID: "sess-1",
+      }],
+    }));
+    void runtime;
+  }
+
   it("rejects a result with no next action", async () => {
-    const { runtime } = await freshRuntime();
-    await executeHandoff(
-      runtime,
-      { action: "prepare", expectedRevision: 0, role: "explorer", objective: "map", context: [], allowedScope: ["src/**"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "done" },
-      leader,
-    );
+    const { runtime, root } = await freshRuntime();
+    await running(runtime, root);
     await expect(
-      executeHandoff(
-        runtime,
-        { action: "complete", expectedRevision: 1, handoffId: "HND-0001", result: { status: "PASS", summary: "s", findings: [], risks: [], unknowns: [], recommended_next_action: "" } },
-        leader,
-      ),
+      executeReport(runtime, { result: { status: "PASS", summary: "s", findings: [], risks: [], unknowns: [], recommended_next_action: "" } }, specialist),
     ).rejects.toThrow();
   });
 
   it("rejects a result with an unknown field", async () => {
-    const { runtime } = await freshRuntime();
-    await executeHandoff(
-      runtime,
-      { action: "prepare", expectedRevision: 0, role: "explorer", objective: "map", context: [], allowedScope: ["src/**"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "done" },
-      leader,
-    );
+    const { runtime, root } = await freshRuntime();
+    await running(runtime, root);
     await expect(
-      executeHandoff(
+      executeReport(
         runtime,
-        {
-          action: "complete",
-          expectedRevision: 1,
-          handoffId: "HND-0001",
-          result: { status: "PASS", summary: "s", findings: [], risks: [], unknowns: [], recommended_next_action: "next", confidence: 0.9 },
-        },
-        leader,
+        { result: { status: "PASS", summary: "s", findings: [], risks: [], unknowns: [], recommended_next_action: "next", confidence: 0.9 } },
+        specialist,
       ),
     ).rejects.toThrow();
   });

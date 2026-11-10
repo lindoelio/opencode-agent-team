@@ -2,6 +2,7 @@ import { EvaluateGateInputSchema } from "../domain/schemas.js";
 import { evaluateAcceptGate, gateRecordFor, independentReviewCheck } from "../domain/gates.js";
 import { appendEvent  } from "../ledger/store.js";
 import { sha256Hex } from "../util/hash.js";
+import { changedPaths, snapshotScope } from "../orchestrator/digest.js";
 import { toolOk, type AgentTeamRuntime } from "../runtime.js";
 import { openLedger } from "./ledger.js";
 import type { ToolContext } from "@opencode/plugin/promise/tool";
@@ -16,7 +17,7 @@ export const GATE_TOOL = {
       claim: { type: "string" },
       expectedRevision: { type: "number" },
     },
-    required: ["gate", "claim", "expectedRevision"],
+    required: ["gate", "expectedRevision"],
     additionalProperties: false,
   },
 } as const;
@@ -38,10 +39,13 @@ export async function executeGate(runtime: AgentTeamRuntime, rawInput: unknown, 
   // it and the DELIVER gate compares it, so a delivery cannot be quietly
   // changed between being accepted and being promoted.
   const contractDigest = current.activeDelivery ? sha256Hex(JSON.stringify(current.activeDelivery)) : undefined;
+  const tree = current.activeDelivery ? snapshotScope(projectRoot, current.activeDelivery.allowedScope) : undefined;
+  const treeDigest = tree?.digest;
+  const changed = changedPaths(current.activeDelivery?.baselineFiles, tree?.files ?? {});
   // Independent review is mechanical, not advisory: REVIEW/ACCEPT require a
-  // completed team-leader/reviewer handoff that covers the work. Self-review
-  // never passes the gate.
-  const review = independentReviewCheck(current.handoffs);
+  // completed team-leader/reviewer handoff that covers every implementation
+  // handoff and every product path that changed. Self-review never passes.
+  const review = independentReviewCheck(current.handoffs, changed);
   const independentReview = review.satisfied;
 
   let result;
@@ -60,7 +64,7 @@ export async function executeGate(runtime: AgentTeamRuntime, rawInput: unknown, 
       // relaxes the proof requirement: it only decides whether a `partial`
       // row carrying proof can satisfy a criterion.
       acceptPartial: runtime.options.strictEvidence === false,
-      claim: input.claim,
+      criterionKinds: current.activeDelivery?.criterionKinds,
       decisions: current.decisions,
     });
     // High-impact low-confidence assumptions block ACCEPT until waived.
@@ -68,22 +72,29 @@ export async function executeGate(runtime: AgentTeamRuntime, rawInput: unknown, 
       result = { ...result, result: "FAIL" as const, missing: [...result.missing, "open-assumptions"], nextAction: "Validate or explicitly waive low-confidence high-impact assumptions" };
     }
   } else if (input.gate === "DELIVER") {
-    const accept = current.gates.find((g) => g.gate === "ACCEPT");
+    const accept = [...current.gates].reverse().find((g) => g.gate === "ACCEPT");
     if (!accept || accept.result !== "PASS") {
       result = { result: "FAIL" as const, satisfied: [], missing: ["ACCEPT PASS required"], failed: [], waivers: [], nextAction: "Pass ACCEPT before DELIVER" };
     } else if (pendingApprovals.length > 0) {
       result = { result: "BLOCKED" as const, satisfied: [], missing: pendingApprovals, failed: [], waivers: [], nextAction: `Await approvals: ${pendingApprovals.join(", ")}` };
-    } else if (accept.contractDigest && accept.contractDigest !== contractDigest) {
+    } else if (!accept.contractDigest || !accept.treeDigest) {
+      // A pre-change ACCEPT has no file digest. It cannot authorize delivery.
+      result = { result: "FAIL" as const, satisfied: [], missing: ["acceptance-digests"], failed: [], waivers: [], nextAction: "Re-run ACCEPT so the accepted file and contract digests are recorded" };
+    } else if (accept.contractDigest !== contractDigest) {
       // The delivery changed after it was accepted. Promoting a contract that
       // nobody accepted is exactly the failure this gate exists to catch.
       result = { result: "FAIL" as const, satisfied: [], missing: ["unchanged-contract"], failed: [], waivers: [], nextAction: "The delivery contract changed after it was accepted; re-run VERIFY and ACCEPT against the current contract" };
+    } else if (accept.treeDigest !== treeDigest) {
+      // The files changed after acceptance. The contract is not the artifact.
+      result = { result: "FAIL" as const, satisfied: [], missing: ["unchanged-artifact"], failed: [], waivers: [], nextAction: "The accepted files changed; re-run VERIFY and ACCEPT against the current tree" };
     } else {
       result = { result: "PASS" as const, satisfied: ["accept-pass", "approvals-clear"], missing: [], failed: [], waivers: [], nextAction: "Promote the verified artifact" };
     }
   } else {
     // INTENT/DISCOVERY/PLAN: structural checks with honest satisfied lists.
     const checks: Array<{ id: string; ok: boolean }> = [{ id: "outcome", ok: current.outcome.length > 0 }];
-    if (input.gate !== "INTENT") {
+    const engagementClass = current.engagementClass ?? "change";
+    if (input.gate === "DISCOVERY" || (input.gate === "PLAN" && engagementClass !== "fix")) {
       checks.push({ id: "discovery-records", ok: current.assumptions.length + current.decisions.length > 0 });
     }
     if (input.gate === "PLAN") checks.push({ id: "active-delivery", ok: current.activeDelivery !== undefined });
@@ -94,7 +105,8 @@ export async function executeGate(runtime: AgentTeamRuntime, rawInput: unknown, 
       : { result: "FAIL" as const, satisfied, missing, failed: [], waivers: [], nextAction: `Provide: ${missing.join(", ")}` };
   }
 
-  const record = gateRecordFor(input.gate, input.claim, result, input.gate === "ACCEPT" ? contractDigest : undefined);
+  const record = gateRecordFor(input.gate, input.claim ?? "", result, input.gate === "ACCEPT" ? contractDigest : undefined);
+  if (input.gate === "ACCEPT" && treeDigest) record.treeDigest = treeDigest;
   const next = await appendEvent(ctx, "gate.evaluated", { gate: input.gate, result: result.result }, (s) => ({
     ...s,
     gates: [...s.gates, record],

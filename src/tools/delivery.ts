@@ -3,6 +3,8 @@ import { appendEvent, writeDeliveryDoc  } from "../ledger/store.js";
 import { deliveryId } from "../util/ids.js";
 import { toolOk, type AgentTeamRuntime } from "../runtime.js";
 import { openLedger } from "./ledger.js";
+import { firstRefusedCheck } from "../domain/checks.js";
+import { snapshotScope } from "../orchestrator/digest.js";
 import type { ToolContext } from "@opencode/plugin/promise/tool";
 
 export const DELIVERY_TOOL = {
@@ -21,6 +23,7 @@ export const DELIVERY_TOOL = {
       allowedScope: { type: "array", items: { type: "string" } },
       prohibitedScope: { type: "array", items: { type: "string" } },
       acceptanceCriteria: { type: "array", items: { type: "string" } },
+      criterionKinds: { type: "object", additionalProperties: { type: "string" } },
       validationSteps: { type: "array", items: { type: "string" } },      proof: {
         type: "array",
         items: {
@@ -49,6 +52,11 @@ export async function executeDelivery(runtime: AgentTeamRuntime, rawInput: unkno
   if (!parsed.success) throw new Error(`invalid delivery input: ${parsed.error.message}`);
   const input = parsed.data;
   const { projectRoot, current, ctx } = await openLedger(runtime, tool, input.expectedRevision, "define the active delivery");
+  const refused = firstRefusedCheck(input.validationSteps, runtime.options.orchestration?.allowedCheckPrefixes ?? []);
+  if (refused) {
+    throw new Error(`validation step is not on the accepted check list: ${refused}. Declare a check on the allowed prefixes, or add the prefix to orchestration.allowedCheckPrefixes.`);
+  }
+  const baseline = snapshotScope(projectRoot, input.allowedScope);
   const id = deliveryId((current.activeDelivery ? Number(current.activeDelivery.id.split("-")[1] ?? "0") : 0) + 1);
   const record = {
     id,
@@ -61,7 +69,9 @@ export async function executeDelivery(runtime: AgentTeamRuntime, rawInput: unkno
     allowedScope: input.allowedScope ?? [],
     prohibitedScope: input.prohibitedScope ?? [],
     acceptanceCriteria: input.acceptanceCriteria,
+    ...(input.criterionKinds ? { criterionKinds: input.criterionKinds } : {}),
     validationSteps: input.validationSteps ?? [],
+    baselineFiles: baseline.files,
     proof: input.proof ?? [],
     risks: input.risks ?? [],
     rollback: input.rollback,
@@ -87,7 +97,9 @@ function renderDeliveryYaml(d: {
   allowedScope: string[];
   prohibitedScope: string[];
   acceptanceCriteria: string[];
+  criterionKinds?: Record<string, string>;
   validationSteps: string[];
+  baselineFiles?: Record<string, string>;
   proof: Array<{ kind: string; claim: string; ref: string }>;
   risks: string[];
   rollback: string;

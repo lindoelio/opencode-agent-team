@@ -1,5 +1,5 @@
 import type { DecisionRef, EvidenceRef, GateRef, HandoffRef } from "./schemas.js";
-import { evidenceSatisfiesCriterion, forbiddenClaim } from "./evidence.js";
+import { evidenceSatisfiesCriterion, type EvidenceKind } from "./evidence.js";
 import { scopeOverlaps } from "./scope.js";
 
 export interface GateResult {
@@ -24,8 +24,11 @@ export function evaluateAcceptGate(input: {
    * mode: the proof requirement is an integrity rule and does not relax.
    */
   acceptPartial?: boolean;
-  /** The claim made at this gate, checked against the evidence kind behind it. */
-  claim?: string;
+  /**
+   * The minimum evidence kind each criterion requires, keyed by criterion id.
+   * Absence means any observed non-judgment kind may satisfy it.
+   */
+  criterionKinds?: Record<string, EvidenceKind>;
   /** The decisions the engagement rests on. Each must be traceable. */
   decisions?: DecisionRef[];
 }): GateResult {
@@ -49,30 +52,27 @@ export function evaluateAcceptGate(input: {
       failed.push(c);
       continue;
     }
-    // pass requires verifiable artifact/command/digest
+    // pass requires verifiable artifact/command/digest, and a kind that meets
+    // the criterion's declared minimum.
+    const required = input.criterionKinds?.[c];
     const passing = evs.filter((e) => {
       if (e.kind === "judgment") return false;
-      if (e.status === "pass") return evidenceSatisfiesCriterion(e);
-      if (acceptPartial && e.status === "partial") return Boolean(e.artifactRef || e.command || e.digest);
+      if (e.status === "pass") return evidenceSatisfiesCriterion(e, required);
+      // Partial never satisfies, even when strictness is relaxed. Relaxing it
+      // would make "I ran part of the check" a pass without observation.
       return false;
     });
     if (passing.length > 0) satisfied.push(c);
     else missing.push(c);
   }
   const blocking = input.findings.some((f) => f.severity === "critical" || f.severity === "high");
+  // The gate no longer reads a free-text claim. Evidence strength is the
+  // declared kind on the criterion, and observation is the proof requirement.
   if (input.blockedBy && input.blockedBy.length > 0 && failed.length === 0 && missing.length > 0) {
     return { result: "BLOCKED", satisfied, missing, failed, waivers, nextAction: `Resolve blocker: ${input.blockedBy[0]}` };
   }
   if (failed.length > 0 || blocking) {
     return { result: "FAIL", satisfied, missing, failed, waivers, nextAction: failed.length > 0 ? `Fix failed criteria: ${failed.join(", ")}` : "Resolve critical/high review findings" };
-  }
-  // CLAIM ≤ EVIDENCE: the claim must not be stronger than the evidence behind
-  // it. A gate claiming production health on the strength of unit tests is
-  // refused, however many criterion-linked rows it carries.
-  const claimProblem = input.claim ? forbiddenClaimIn(input.evidence, input.claim) : undefined;
-  if (claimProblem) {
-    missing.push("claim-evidence-strength");
-    return { result: "FAIL", satisfied, missing, failed, waivers, nextAction: `Weaken the claim or strengthen the evidence: ${claimProblem}` };
   }
   // A decision with no recorded basis is a preference. Every decision the
   // engagement rests on must carry drivers, real options and a rationale.
@@ -84,18 +84,6 @@ export function evaluateAcceptGate(input: {
     return { result: "FAIL", satisfied, missing, failed, waivers, nextAction: `Provide evidence for: ${missing.join(", ")}` };
   }
   return { result: "PASS", satisfied, missing, failed, waivers, nextAction: "Promote per release contract" };
-}
-
-/** The first evidence kind that may not support the claim. */
-function forbiddenClaimIn(evidence: EvidenceRef[], claim: string): string | undefined {
-  for (const e of evidence) {
-    // A judgement never carries a claim, so it never refuses one either.
-    if (e.kind === "judgment") continue;
-    if (e.status !== "pass") continue;
-    const reason = forbiddenClaim(e.kind, claim);
-    if (reason) return reason;
-  }
-  return undefined;
 }
 
 export function gateRecordFor(gate: GateRef["gate"], claim: string, result: GateResult, contractDigest?: string): GateRef {
@@ -134,21 +122,46 @@ export interface ReviewCheck {
  * was completed, the reviewer's scope must overlap it. Without that, a
  * reviewer can rubber-stamp a delivery it never looked at.
  */
-export function independentReviewCheck(handoffs: HandoffRef[]): ReviewCheck {
-  const reviewer = handoffs.find((h) => h.role === "reviewer" && h.status === "completed");
-  if (!reviewer) {
+export function independentReviewCheck(handoffs: HandoffRef[], changedPaths: string[] = []): ReviewCheck {
+  const reviewers = handoffs.filter((h) => h.role === "reviewer" && h.status === "completed");
+  if (reviewers.length === 0) {
     return { satisfied: false, reason: "no completed team-leader/reviewer handoff" };
   }
+  const failedReviewer = reviewers.find((h) => {
+    const status = (h.result as { status?: string } | undefined)?.status;
+    return status === "FAIL" || status === "BLOCKED";
+  });
+  if (failedReviewer) {
+    return { satisfied: false, reason: `reviewer ${failedReviewer.id} reported ${(failedReviewer.result as { status?: string }).status}` };
+  }
+  const reviewer = reviewers.find((h) => h.allowedScope.length > 0) ?? reviewers[0]!;
   const implementations = handoffs.filter((h) => IMPLEMENTATION_ROLES.has(h.role) && h.status === "completed");
-  if (implementations.length === 0) {
-    return { satisfied: true, reason: "reviewer handoff completed; no implementation handoff to cross-check" };
+  if (implementations.length === 0 && changedPaths.length === 0) {
+    return { satisfied: false, reason: "the delivery has no implementation to review" };
   }
   if (reviewer.allowedScope.length === 0) {
     return { satisfied: false, reason: "the reviewer handoff has no allowed scope, so it cannot be shown to have reviewed the implementation" };
   }
-  const covered = implementations.some((impl) => scopeOverlaps(reviewer.allowedScope, impl.allowedScope));
-  if (!covered) {
-    return { satisfied: false, reason: "the reviewer handoff does not cover the scope of the implementation it reviewed" };
+  // Independence is unprovable without the session ids. Fail closed.
+  if (!reviewer.sessionID) {
+    return { satisfied: false, reason: "the reviewer handoff has no session id, so independence cannot be shown" };
   }
-  return { satisfied: true, reason: "reviewer handoff completed over the implementation's scope" };
+  if (implementations.some((h) => !h.sessionID)) {
+    return { satisfied: false, reason: "an implementation handoff has no session id, so independence cannot be shown" };
+  }
+  const authorSessions = new Set(implementations.map((h) => h.sessionID).filter((id): id is string => Boolean(id)));
+  if (authorSessions.has(reviewer.sessionID)) {
+    return { satisfied: false, reason: "the reviewer session is the session that wrote the implementation" };
+  }
+  for (const impl of implementations) {
+    if (!scopeOverlaps(reviewer.allowedScope, impl.allowedScope)) {
+      return { satisfied: false, reason: `the reviewer handoff does not cover the scope of ${impl.id}` };
+    }
+  }
+  for (const path of changedPaths) {
+    if (!scopeOverlaps(reviewer.allowedScope, [path])) {
+      return { satisfied: false, reason: `the reviewer handoff does not cover the changed path ${path}` };
+    }
+  }
+  return { satisfied: true, reason: "reviewer handoff completed over every implementation and changed path" };
 }

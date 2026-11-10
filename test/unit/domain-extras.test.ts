@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { claimSupported, evidenceSatisfiesCriterion } from "../../src/domain/evidence.js";
+import { kindMeets, evidenceSatisfiesCriterion } from "../../src/domain/evidence.js";
 import { buildPacket, renderPacketPrompt, validateResult } from "../../src/domain/handoff.js";
 import { gateRecordFor, decisionsTraceable } from "../../src/domain/gates.js";
 import { statusForPhase, validatePhaseTransition } from "../../src/domain/state-machine.js";
@@ -10,7 +10,8 @@ import type { AgentTeamProjectStateV2 } from "../../src/domain/schemas.js";
 
 function baseState(): AgentTeamProjectStateV2 {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
+    engagementClass: "change",
     revision: 3,
     project: { id: "PRJ-X", canonicalDirectoryHash: "h" },
     engagement: { id: "ENG-X", createdAt: "t", updatedAt: "t", status: "VERIFYING", phase: "VERIFY" },
@@ -31,12 +32,11 @@ function baseState(): AgentTeamProjectStateV2 {
 }
 
 describe("domain extras", () => {
-  it("bounds claims by evidence strength", () => {
-    expect(claimSupported("test", "covered units pass").ok).toBe(true);
-    expect(claimSupported("test", "feature works end to end").ok).toBe(false);
-    expect(claimSupported("visual", "backend behavior is correct").ok).toBe(false);
-    expect(claimSupported("runtime", "request was accepted").ok).toBe(true);
-    expect(evidenceSatisfiesCriterion({ id: "E", criterionId: "AC-1", kind: "test", status: "pass", summary: "s", command: "npm test", observedAt: "t", limitations: [] })).toBe(true);
+  it("bounds evidence by the declared kind", () => {
+    expect(kindMeets("test", "test")).toBe(true);
+    expect(kindMeets("visual", "test")).toBe(false);
+    expect(kindMeets("runtime", "test")).toBe(true);
+    expect(evidenceSatisfiesCriterion({ id: "E", criterionId: "AC-1", kind: "test", status: "pass", summary: "s", command: "npm test", observedAt: "t", observed: true, limitations: [] })).toBe(true);
     expect(evidenceSatisfiesCriterion({ id: "E", criterionId: "AC-1", kind: "test", status: "pass", summary: "s", observedAt: "t", limitations: [] })).toBe(false);
     expect(evidenceSatisfiesCriterion({ id: "E", criterionId: "AC-1", kind: "test", status: "skipped", summary: "s", command: "npm test", observedAt: "t", limitations: [] })).toBe(false);
   });
@@ -68,10 +68,11 @@ describe("domain extras", () => {
     validatePhaseTransition("VERIFY", "VERIFY");
   });
   it("handles migrations", () => {
-    expect(CURRENT_SCHEMA_VERSION).toBe(2);
-    expect(needsMigration(2)).toBe(false);
+    expect(CURRENT_SCHEMA_VERSION).toBe(3);
+    expect(needsMigration(3)).toBe(false);
+    expect(needsMigration(2)).toBe(true);
     expect(needsMigration(1)).toBe(true);
-    expect(migrateUnknown({ schemaVersion: 2 })).toEqual({ schemaVersion: 2 });
+    expect(migrateUnknown({ schemaVersion: 3 })).toEqual({ schemaVersion: 3 });
     expect(() => migrateUnknown({ schemaVersion: 9 })).toThrow();
     expect(() => migrateUnknown(null)).toThrow();
   });
@@ -121,12 +122,29 @@ describe("domain extras", () => {
     expect(yaml).toContain("phase: VERIFY");
     expect(yaml).toContain("revision: 3");
     expect(yaml).toContain("missing_independent_review: true");
-    const reviewed = project({ ...baseState(), handoffs: [{ id: "HND-0001", role: "reviewer", objective: "o", context: [], allowedScope: [], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "s", skills: [], dependsOn: [], status: "completed" }] });
+    const reviewed = project({ ...baseState(), handoffs: [
+      { id: "HND-0001", role: "coder", objective: "o", context: [], allowedScope: ["src/a.ts"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "s", skills: [], dependsOn: [], status: "completed", sessionID: "ses_coder" },
+      { id: "HND-0002", role: "reviewer", objective: "o", context: [], allowedScope: ["src/a.ts"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "s", skills: [], dependsOn: [], status: "completed", sessionID: "ses_reviewer" },
+    ] });
     expect(reviewed.missing_independent_review).toBe(false);
-    expect(reviewed.handoffs_completed).toEqual(["HND-0001:reviewer"]);
+    expect(reviewed.handoffs_completed).toEqual(["HND-0001:coder", "HND-0002:reviewer"]);
     expect(renderProjectionYaml(reviewed)).toContain("missing_independent_review: false");
     const noDelivery = project({ ...baseState(), activeDelivery: undefined });
     expect(noDelivery.active_delivery).toBeUndefined();
+  });
+  it("lists criterion gaps with the observed flag", () => {
+    const state = baseState();
+    state.activeDelivery = {
+      id: "DEL-001", title: "t", userOutcome: "u", entryState: "e", happyPath: ["h"],
+      inScope: [], outOfScope: [], allowedScope: ["src/**"], prohibitedScope: [],
+      acceptanceCriteria: ["AC-1", "AC-2"], validationSteps: ["npm test"], proof: [],
+      risks: [], rollback: "revert", owner: "team-leader", status: "IN_PROGRESS",
+    };
+    state.evidence = [
+      { id: "E1", criterionId: "AC-1", kind: "test", status: "pass", summary: "s", command: "npm test", observedAt: "t", observed: true, limitations: [] },
+    ];
+    const p = project(state);
+    expect(p.criteria).toEqual(["AC-1: satisfied (observed)", "AC-2: missing"]);
   });
   it("derives ready and blocked handoffs from the dependency graph", () => {
     const wave = project({

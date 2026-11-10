@@ -18,9 +18,26 @@ function directoryPrefix(pattern: string): string | null {
   return null;
 }
 
+/** Normalises a relative path, collapsing `..` before any scope check. */
+export function normaliseRelativePath(path: string): string {
+  const parts: string[] = [];
+  for (const part of path.replace(/\\/g, "/").split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      // A `..` that would leave the project root is preserved, so it can
+      // never match an allowed scope. Dropping it would turn `../src/a.ts`
+      // into `src/a.ts`, which is the exact escape this check prevents.
+      if (parts.length === 0) parts.push("..");
+      else if (parts[parts.length - 1] !== "..") parts.pop();
+      else parts.push("..");
+    } else parts.push(part);
+  }
+  return parts.join("/");
+}
+
 /** True when `path` falls inside `pattern`. */
 export function pathInScope(path: string, pattern: string): boolean {
-  const target = path.trim().replace(/^\.\//, "");
+  const target = normaliseRelativePath(path.trim().replace(/^\.\//, ""));
   if (target.length === 0) return false;
   const prefix = directoryPrefix(pattern);
   if (prefix !== null) {

@@ -1,7 +1,7 @@
 import { configuredReasoningEfforts } from "../catalog/model-options.js";
 import { packageVersion } from "../catalog/agents.js";
-import { describeHostCapabilities, hostHasRequiredSurface, hostVersionSupport, resolveDecisionGenerator, resolveTextGenerator, SUPPORTED_HOST_LINES, SUPPORTED_SDK_RANGE } from "../compat/host.js";
-import { decisionReport, thresholdsLine } from "../decision/catalog.js";
+import { describeHostCapabilities, hostHasRequiredSurface, hostVersionSupport, MINIMUM_HOST_VERSION, resolveDecisionGenerator, resolveSessionLauncher, resolveShellSurface, resolveTextGenerator, SUPPORTED_HOST_LINES, SUPPORTED_SDK_RANGE } from "../compat/host.js";
+import { decisionReport } from "../decision/catalog.js";
 import { decisionOptions } from "../options.js";
 import { readState } from "../ledger/store.js";
 import { projectRootOf, type AgentTeamRuntime } from "../runtime.js";
@@ -24,19 +24,18 @@ export async function runDoctor(runtime: AgentTeamRuntime): Promise<DoctorReport
   const checks: DoctorCheck[] = [];
   const opencodeVersion: string = String((runtime.ctx.app as unknown as { version?: string }).version ?? "unknown");
 
-  // 1. OpenCode version compat. The plugin supports the 2.0.x, 2.1.x and
-  // 2.2.x host lines; anything else is DEGRADED (it may still work, but it
-  // is not a line this plugin is verified against).
+  // 1. OpenCode version compat. The plugin requires 2.2.0 or newer. Below that
+  // the team runtime cannot exist, so the preflight fails instead of degrading.
   const support = hostVersionSupport(opencodeVersion);
   checks.push({
     name: "OpenCode",
-    status: support === "supported" ? "PASS" : "DEGRADED",
+    status: support === "supported" ? "PASS" : "FAIL",
     detail:
       support === "supported"
-        ? `${opencodeVersion} — supported (${SUPPORTED_HOST_LINES.join(" / ")}.x)`
+        ? `${opencodeVersion} — supported (${SUPPORTED_HOST_LINES.join(" / ")}.x or newer)`
         : support === "unknown"
-          ? `${opencodeVersion} — version not recognised; supported lines are ${SUPPORTED_HOST_LINES.join(" / ")}.x`
-          : `${opencodeVersion} — outside the supported lines (${SUPPORTED_HOST_LINES.join(" / ")}.x); the plugin may work but is not verified there`,
+          ? `${opencodeVersion} — version not recognised; Agent Team requires ${MINIMUM_HOST_VERSION} or newer`
+          : `${opencodeVersion} — below the required ${MINIMUM_HOST_VERSION}; update OpenCode before using Agent Team`,
   });
 
   // 1b. Host API surface. The real compatibility signal is the API surface,
@@ -46,6 +45,25 @@ export async function runDoctor(runtime: AgentTeamRuntime): Promise<DoctorReport
     name: "Host API surface",
     status: hostHasRequiredSurface(runtime.ctx) ? "PASS" : "FAIL",
     detail: capabilities.join("; "),
+  });
+
+  // 1c. Team runtime. A host that cannot create a child session cannot run a
+  // team, whatever its version says. No prompt-packet fallback exists.
+  const sessionSurface = resolveSessionLauncher(runtime.ctx);
+  checks.push({
+    name: "Team runtime",
+    status: sessionSurface.available ? "PASS" : "FAIL",
+    detail: sessionSurface.available
+      ? "session.create is available; a booked specialist can run in its own session"
+      : "session.create is missing; Agent Team refuses to launch a specialist on this host",
+  });
+  const shellSurface = resolveShellSurface(runtime.ctx);
+  checks.push({
+    name: "Check runner",
+    status: shellSurface.available ? "PASS" : "DEGRADED",
+    detail: shellSurface.available
+      ? "a host shell is available; declared checks can be observed"
+      : "no host shell surface; observed checks cannot run and criteria will stay missing",
   });
 
   // 2. Plugin/API version
@@ -118,7 +136,7 @@ export async function runDoctor(runtime: AgentTeamRuntime): Promise<DoctorReport
 
   // 4. Generation with the harness default model (no mutation). The
   // generator is resolved by feature detection: `ctx.experimental.generate.text`
-  // on 2.2.x, `ctx.generate.text` on 2.0.x/2.1.x.
+  // is the 2.2 surface; the deprecated `ctx.generate.text` is a fallback.
   try {
     const generator = resolveTextGenerator(runtime.ctx);
     const gen = await generator.text({ prompt: "Reply with exactly: doctor-ok" });
@@ -130,7 +148,7 @@ export async function runDoctor(runtime: AgentTeamRuntime): Promise<DoctorReport
   try {
     const tools = await runtime.ctx.tool.list();
     const agentTeamTools = tools.filter((t) => t.id.startsWith("agent_team_"));
-    checks.push({ name: "Tool registration", status: agentTeamTools.length >= 9 ? "PASS" : "FAIL", detail: `${agentTeamTools.length}/9 agent_team_* tools` });
+    checks.push({ name: "Tool registration", status: agentTeamTools.length >= 10 ? "PASS" : "FAIL", detail: `${agentTeamTools.length}/10 agent_team_* tools` });
   } catch (err) {
     checks.push({ name: "Tool registration", status: "FAIL", detail: (err as Error).message.slice(0, 200) });
   }
@@ -164,7 +182,7 @@ export async function runDoctor(runtime: AgentTeamRuntime): Promise<DoctorReport
     checks,
     recommendedAction:
       verdict === "PASS"
-        ? "Ready. Start with /agent-team/start."
+        ? "Ready. Tell the leader the outcome you want."
         : "Resolve FAIL lines above; Agent Team never substitutes a model on its own — fix the provider, the catalog or your configuration.",
     opencodeVersion,
     pluginVersion: packageVersion(),

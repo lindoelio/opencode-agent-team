@@ -1,7 +1,4 @@
 import { resolveModelOptions } from "../catalog/model-options.js";
-import { resolveDecisionGenerator } from "../compat/host.js";
-import { decisionReport, renderDecisionContext, thresholdsLine } from "../decision/catalog.js";
-import { decisionOptions } from "../options.js";
 import { roleSkillsBlock } from "../catalog/skills.js";
 import { readState } from "../ledger/store.js";
 import { project, renderProjectionYaml } from "../ledger/projection.js";
@@ -12,16 +9,16 @@ const CONSTITUTION_VERSION = "agent-team-constitution/v3";
 
 const ROLE_CONTRACTS: Record<string, string> = {
   "team-leader":
-    "team-leader: accountable orchestrator. Plan the delivery as a dependency graph and book each independent wave in one agent_team_handoff prepareWave call, within the parallel budget the handoff tool enforces (keep scope, file and artifact ownership non-overlapping). You own the ledger: only team-leader writes assumptions, decisions, evidence, gates and handoffs; specialists report their result and you record it. ALLOW is the baseline: execute external, destructive, and production actions unless a registered guardrail says otherwise. Return verdict-first reports with evidence.",
-  "team-leader/explorer": "team-leader/explorer: read-only discovery. No edits, no shells, no helper agents. Return SpecialistResult@1.",
-  "team-leader/product": "team-leader/product: clarify problem/value. Edit only .agent-team artifacts when asked. Return SpecialistResult@1.",
-  "team-leader/architect": "team-leader/architect: compare 2-4 options with reversibility. Edit only .agent-team/decisions docs when asked. Return SpecialistResult@1.",
-  "team-leader/designer": "team-leader/designer: direction + states + visual evidence plan. Return SpecialistResult@1.",
-  "team-leader/coder": "team-leader/coder: implement the bounded unit inside the allowed scope only. Never mark PASS. Return SpecialistResult@1.",
-  "team-leader/worker": "team-leader/worker: generalist executor for non-engineering units (research, writing, analysis, ops, admin). Never write product code; report code needs as a gap. Never mark PASS. Return SpecialistResult@1.",
-  "team-leader/reviewer": "team-leader/reviewer: adversarial independent review of any artifact. Try to prove the work wrong before accepting it; absence of evidence is a finding. Never review your own high-risk implementation. Return SpecialistResult@1.",
-  "team-leader/security": "team-leader/security: threat review. Report locations, never values. Integrity DENY is final. Return SpecialistResult@1.",
-  "team-leader/release": "team-leader/release: same-artifact promotion + rollback. Execute promotion autonomously unless a guardrail covers it. Return SpecialistResult@1.",
+    "team-leader: accountable orchestrator. Plan the delivery as a dependency graph and book each independent wave in one agent_team_handoff launch call, within the parallel budget the tool enforces (keep writable paths disjoint). You own the ledger: only team-leader writes assumptions, decisions, evidence, gates and delivery contracts; a specialist reports through agent_team_report and you do not retype it. ALLOW is the baseline for local, external, and destructive actions unless a guardrail matches; promotion is denied until the operator records allow-promotion. Return verdict-first reports with evidence.",
+  "team-leader/explorer": "team-leader/explorer: read-only discovery. No edits, no shells, no helper agents. Call agent_team_report with SpecialistResult@1 and stop.",
+  "team-leader/product": "team-leader/product: clarify problem/value. Edit only .agent-team artifacts when asked. Call agent_team_report with SpecialistResult@1 and stop.",
+  "team-leader/architect": "team-leader/architect: compare 2-4 options with reversibility. Edit only .agent-team/decisions docs when asked. Call agent_team_report with SpecialistResult@1 and stop.",
+  "team-leader/designer": "team-leader/designer: direction + states + visual evidence plan. Call agent_team_report with SpecialistResult@1 and stop.",
+  "team-leader/coder": "team-leader/coder: implement the bounded unit inside the allowed scope only. Never mark PASS. Call agent_team_report with SpecialistResult@1 and stop.",
+  "team-leader/worker": "team-leader/worker: generalist executor for non-engineering units (research, writing, analysis, ops, admin). Never write product code; report code needs as a gap. Never mark PASS. Call agent_team_report with SpecialistResult@1 and stop.",
+  "team-leader/reviewer": "team-leader/reviewer: adversarial independent review of any artifact. Try to prove the work wrong before accepting it; absence of evidence is a finding. Never review your own high-risk implementation. Call agent_team_report with SpecialistResult@1 and stop.",
+  "team-leader/security": "team-leader/security: threat review. Report locations, never values. Integrity DENY is final. Call agent_team_report with SpecialistResult@1 and stop.",
+  "team-leader/release": "team-leader/release: same-artifact promotion + rollback. Promotion is denied unless the operator recorded allow-promotion; prepare the pipeline packet and do not push on your own. Call agent_team_report with SpecialistResult@1 and stop.",
 };
 
 /**
@@ -65,18 +62,8 @@ export async function registerContextHook(runtime: AgentTeamRuntime): Promise<{ 
     }
     const skills = roleSkillsBlock(agent);
     if (skills) event.system.push({ type: "text", text: skills } as never);
-    // The decision capability, so a specialist knows a calibrated first pass is
-    // available and what bar it is held to.
-    try {
-      const options = decisionOptions(runtime.options);
-      const surface = resolveDecisionGenerator(runtime.ctx);
-      const state = await readState(root);
-      const judgementRows = state?.evidence.filter((e) => e.kind === "judgment").length ?? 0;
-      const report = await decisionReport(runtime.ctx, root, surface.available, judgementRows);
-      event.system.push({ type: "text", text: renderDecisionContext(report, thresholdsLine(agent, options)) } as never);
-    } catch {
-      // storage unavailable: continue without the decision block
-    }
+    // The decision catalog is not advertised on every turn. The router records
+    // its route in a keyed session instruction, and the leader reads it there.
     // Model, reasoning effort and output budget: applied only when the user
     // configured them. Otherwise the harness defaults stay untouched.
     const model = resolveModelOptions(runtime.options, agent);
@@ -88,7 +75,12 @@ export async function registerContextHook(runtime: AgentTeamRuntime): Promise<{ 
     if (tools) {
       const denyTools = (names: string[]): void => { for (const n of names) delete tools[n]; };
       // Capability boundaries (not authorization gates): explorer stays read-only.
-      if (agent === "team-leader/explorer") denyTools(["edit", "write", "patch", "shell"]);
+      if (agent === "team-leader/explorer" || agent === "team-leader/reviewer" || agent === "team-leader/security") {
+        denyTools(["edit", "write", "patch", "shell"]);
+      }
+      // Product and architect may edit only their own .agent-team artifacts;
+      // the tool boundary still cannot scope edit, so shell stays off.
+      if (agent === "team-leader/product" || agent === "team-leader/architect") denyTools(["shell"]);
       // A read-only role may not spawn a helper that could edit or shell.
       if (READ_ONLY_ROLES.has(agent)) denyTools(["subagent"]);
     }

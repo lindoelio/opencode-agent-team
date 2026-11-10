@@ -9,7 +9,8 @@ plugin actually enforces today.
 
 | Version | Supported |
 |---|---|
-| `0.4.x` | Yes — security fixes on the latest `0.4` patch |
+| `0.7.x` | Yes — security fixes on the latest `0.7` patch |
+| `< 0.7` | No — the evidence and promotion contracts changed |
 
 ## Reporting a vulnerability
 
@@ -34,6 +35,22 @@ follows once the report is validated.
 - Social engineering, physical access, or a compromised user workstation.
 - Vulnerabilities in OpenCode itself, in providers, or in third-party models.
   Report those upstream and link the issue here.
+
+## Promotion is denied, not asked
+
+Push, tag, publish, and deploy are refused unless the operator records
+`--allow-promotion`. An ask-before guardrail does not authorize promotion, and
+a one-time permission reply does not turn the refusal into an allow. Local,
+external, and destructive actions that are not promotion stay autonomous.
+
+## A pass is an observed check
+
+A criterion is satisfied only by a check Agent Team ran through the host. The
+plugin stores the exit code and an output digest. A `pass` typed by a model is
+refused. The plugin never spawns a check process itself. A host without a shell
+surface leaves the criterion missing rather than inventing one, and the
+preflight reports `DEGRADED` so the operator can see that observed checks cannot
+run.
 
 ## Baseline controls
 

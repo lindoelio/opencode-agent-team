@@ -2,7 +2,8 @@ import type { AgentTeamRuntime } from "../runtime.js";
 import { containsQuarantinedInstruction } from "./untrusted.js";
 import { readState } from "../ledger/store.js";
 import { projectRootOf } from "../runtime.js";
-import { pathAllowed, pathProhibited } from "../domain/scope.js";
+import { normaliseRelativePath, pathAllowed, pathProhibited } from "../domain/scope.js";
+import { isAllowedCheck } from "../domain/checks.js";
 
 const failureCounts = new Map<string, number>();
 
@@ -34,16 +35,36 @@ function writtenPath(input: unknown): string | undefined {
  */
 async function assertWithinHandoffScope(
   runtime: AgentTeamRuntime,
+  sessionID: string,
   agent: string,
   path: string,
 ): Promise<void> {
-  const role = agent.replace(/^team-leader\//, "");
   const root = projectRootOf(runtime.ctx);
   const state = await readState(root);
-  if (!state) return;
-  const handoff = [...state.handoffs].reverse().find((h) => h.role === role && h.status !== "cancelled");
-  if (!handoff) return;
-  const relative = path.startsWith(root) ? path.slice(root.length).replace(/^\//, "") : path;
+  if (!state) {
+    // A specialist cannot write product files without a ledger to prove the
+    // booking. The leader is allowed before an engagement exists.
+    if (agent !== "team-leader") throw new Error("Agent Team DENY: no engagement state, so no specialist booking can be proven.");
+    return;
+  }
+  const relative = normaliseRelativePath(path.startsWith(root) ? path.slice(root.length).replace(/^\//, "") : path);
+  if (agent === "team-leader") {
+    // The leader does not edit product files while a delivery is active. The
+    // diff belongs to the booked specialist, and review must cover it.
+    const engagementFile = relative === ".agent-team" || relative.startsWith(".agent-team/");
+    if (state.activeDelivery && !engagementFile) {
+      throw new Error(
+        `Agent Team DENY: the leader cannot edit ${relative} while delivery ${state.activeDelivery.id} is active; book a specialist.`,
+      );
+    }
+    return;
+  }
+  const handoff = state.handoffs.find((h) => h.sessionID === sessionID && h.status === "running");
+  if (!handoff) {
+    throw new Error(
+      `Agent Team DENY: ${agent} has no running booking; product-file writes require a launched handoff.`,
+    );
+  }
   if (!pathAllowed(relative, handoff.allowedScope)) {
     throw new Error(
       `Agent Team DENY: ${relative} is outside the allowed scope of handoff ${handoff.id} (${handoff.allowedScope.join(", ") || "none declared"}).`,
@@ -83,9 +104,26 @@ export async function registerToolAuditHooks(runtime: AgentTeamRuntime): Promise
     // A specialist writes inside the scope of the handoff it was given.
     const agent = String(e.agent ?? "");
     const toolName = String(e.tool ?? "");
-    if (WRITE_TOOLS.has(toolName) && agent.startsWith("team-leader/")) {
+    if (WRITE_TOOLS.has(toolName) && agent.startsWith("team-leader")) {
       const path = writtenPath(e.input);
-      if (path) await assertWithinHandoffScope(runtime, agent, path);
+      if (path) await assertWithinHandoffScope(runtime, sessionId, agent, path);
+    }
+    // The leader's shell is not the observation path. While a delivery is
+    // active it cannot mutate the product through a shell either.
+    if (toolName === "shell" && agent === "team-leader") {
+      const state = await readState(projectRootOf(runtime.ctx));
+      if (state?.activeDelivery) {
+        throw new Error(
+          `Agent Team DENY: the leader cannot run shell while delivery ${state.activeDelivery.id} is active; the plugin observes declared checks.`,
+        );
+      }
+    }
+    // A specialist shell can write anywhere. Only an allowlisted check runs.
+    if (toolName === "shell" && agent.startsWith("team-leader/")) {
+      const command = String((e.input as Record<string, unknown> | undefined)?.["command"] ?? "");
+      if (!isAllowedCheck(command, runtime.options.orchestration?.allowedCheckPrefixes ?? [])) {
+        throw new Error("Agent Team DENY: a specialist shell is limited to an allowlisted check command.");
+      }
     }
     if (e.id) startedAt.set(String(e.id), Date.now());
   });
@@ -101,6 +139,19 @@ export async function registerToolAuditHooks(runtime: AgentTeamRuntime): Promise
           await runtime.ctx.storage.set("agent-team/strategy_review_required", { tool: toolName, at: new Date().toISOString(), hint: "two equivalent failures — revise requirement, architecture, environment, or validation strategy" } as never);
         } catch {
           // storage best-effort
+        }
+        try {
+          const root = projectRootOf(runtime.ctx);
+          const state = await readState(root);
+          if (state) {
+            const { appendEvent, storeContext } = await import("../ledger/store.js");
+            await appendEvent(storeContext(root, "plugin", "plugin"), "route.recorded", { reason: "revise-approach" }, (s) => ({
+              ...s,
+              route: { engagementClass: s.engagementClass ?? "change", namesFileAndSymptom: false, riskSignal: false, reason: "revise-approach" },
+            }));
+          }
+        } catch {
+          // the storage hint above is the fallback
         }
       }
     } else {

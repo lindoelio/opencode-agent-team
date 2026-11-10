@@ -27,12 +27,16 @@ export async function registerPermissionHook(runtime: AgentTeamRuntime): Promise
     // Effective autonomy: state overrides plugin options.
     let mode = runtime.options.autonomy?.mode ?? "yolo";
     let guardrails = [...(runtime.options.autonomy?.askBefore ?? [])];
+    let allowPromotion = runtime.options.autonomy?.allowPromotion === true;
     try {
       const root = projectRootOf(runtime.ctx);
       const state = await readState(root);
       if (state) {
         guardrails = [...guardrails, ...state.guardrails];
         if (state.autonomyMode) mode = state.autonomyMode;
+        // An explicit state value wins, including false: --no-promotion must
+        // override an option that enabled it.
+        if (state.allowPromotion !== undefined) allowPromotion = state.allowPromotion === true;
       }
     } catch {
       // storage failure: fall back to option-level configuration
@@ -41,9 +45,29 @@ export async function registerPermissionHook(runtime: AgentTeamRuntime): Promise
     const query = { action, resource: resources[0], role: agent, isExternal, isDestructive, isOutsideDelivery };
     const verdict = mode === "guarded" ? classifyGuarded(query) : classifyAuthority(query);
 
+    // Integrity denial runs first. A promotion flag can never turn a DENY into
+    // an allow, even when the action name also mentions deploy.
     if (verdict.effect === "DENY") {
       event.effect = "deny";
       event.message = `Agent Team DENY: ${verdict.reason}`;
+      return;
+    }
+
+    // Promotion is denied, not asked. The allow-promotion flag is the only
+    // authorization; an ask-before match and a one-time permission reply are
+    // not.
+    // Match the action, not the resource: editing `release.md` is not a
+    // release, and a shell command that mentions a deploy directory is not a
+    // deploy either.
+    const isPromotion = /\b(push|tag|publish|deploy|release|deployment)\b/i.test(action);
+    if (isPromotion && !allowPromotion) {
+      event.effect = "deny";
+      event.message = "Agent Team DENY: promotion requires explicit authorization. Record --allow-promotion; an ask-before guardrail does not authorize it.";
+      return;
+    }
+    if (isPromotion && allowPromotion) {
+      event.effect = "allow";
+      event.message = "Agent Team ALLOW: promotion explicitly authorized.";
       return;
     }
 
@@ -81,17 +105,5 @@ export async function registerPermissionHook(runtime: AgentTeamRuntime): Promise
   return { dispose: () => reg.dispose() };
 }
 
-/** Validation-safe shell prefixes the verifier may run after hook promotion. */
-export const VALIDATION_SAFE_PREFIXES = [
-  "npm test",
-  "npm run typecheck",
-  "npm run test",
-  "npx tsc",
-  "npx vitest",
-  "git status",
-  "git diff",
-] as const;
-
-export function isValidationSafe(command: string): boolean {
-  return VALIDATION_SAFE_PREFIXES.some((p) => command.trim().startsWith(p));
-}
+/** Re-exported from the domain so the observer and the hook share one list. */
+export { VALIDATION_SAFE_PREFIXES, isAllowedCheck as isValidationSafe } from "../domain/checks.js";

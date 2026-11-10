@@ -35,13 +35,13 @@ function mockCtx(): { ctx: never; calls: Record<string, number> } {
     model: { list: async () => [] },
     storage: { set: async () => {}, get: async () => undefined, remove: async () => {} },
     generate: { text: async () => ({ text: "ok" }) },
-    app: { version: "2.0.10" },
+    app: { version: "2.2.0" },
   };
   return { ctx: ctx as never, calls };
 }
 
 describe("plugin registration contracts", () => {
-  it("registers 9 agent-team tools, 15 commands and 18 skills without throwing", async () => {
+  it("registers the agent-team tools, 3 commands and 18 skills without throwing", async () => {
     const { ctx } = mockCtx();
     const runtime = createRuntime(ctx as never, { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false } as never);
     const addedTools: string[] = [];
@@ -73,8 +73,8 @@ describe("plugin registration contracts", () => {
     await registerCommands(runtime as AgentTeamRuntime);
     await registerSkills(runtime as AgentTeamRuntime);
     await registerHooks(runtime as AgentTeamRuntime);
-    expect(addedTools.sort()).toEqual(["agent_team_define_delivery", "agent_team_evaluate_decision", "agent_team_evaluate_gate", "agent_team_handoff", "agent_team_record_assumption", "agent_team_record_decision", "agent_team_request_approval", "agent_team_state", "agent_team_submit_evidence"]);
-    expect(addedCommands).toHaveLength(15);
+    expect(addedTools.sort()).toEqual(["agent_team_define_delivery", "agent_team_evaluate_decision", "agent_team_evaluate_gate", "agent_team_handoff", "agent_team_record_assumption", "agent_team_record_decision", "agent_team_report", "agent_team_request_approval", "agent_team_state", "agent_team_submit_evidence"]);
+    expect(addedCommands).toHaveLength(3);
     expect(addedSkills).toHaveLength(18);
     // Regression: Skill.Info requires absolute `path` (server disables the
     // plugin on schema mismatch); `location` is not a valid key.
@@ -88,7 +88,7 @@ describe("plugin registration contracts", () => {
     // an undefined import) means the tool is not connected to its
     // implementation at all and must fail this test rather than be
     // swallowed.
-    expect(toolExecutes).toHaveLength(9);
+    expect(toolExecutes).toHaveLength(10);
     for (const execute of toolExecutes) {
       const outcome = await (execute as (input: unknown, tool: unknown) => Promise<unknown>)({}, { sessionID: "s", agent: "team-leader" }).then(
         () => ({ threw: false as const, error: undefined as unknown }),
@@ -111,6 +111,7 @@ describe("plugin registration contracts", () => {
     const { HANDOFF_TOOL } = await import("../../src/tools/handoff.js");
     const { DELIVERY_TOOL } = await import("../../src/tools/delivery.js");
     const { EVALUATE_DECISION_TOOL } = await import("../../src/tools/evaluate-decision.js");
+    const { REPORT_TOOL } = await import("../../src/tools/report.js");
     const tools = [
       AGENT_TEAM_STATE_TOOL,
       ASSUMPTION_TOOL,
@@ -121,6 +122,7 @@ describe("plugin registration contracts", () => {
       HANDOFF_TOOL,
       DELIVERY_TOOL,
       EVALUATE_DECISION_TOOL,
+      REPORT_TOOL,
     ];
     for (const tool of tools) {
       expect(tool.input.additionalProperties).toBe(false);
@@ -130,9 +132,11 @@ describe("plugin registration contracts", () => {
     // The declared enums must match the canonical domain enums.
     const { HANDOFF_ROLES } = await import("../../src/domain/handoff.js");
     const { SpecialistRoleSchema } = await import("../../src/domain/schemas.js");
-    const handoff = HANDOFF_TOOL.input.properties["role"] as { enum: readonly string[] };
-    expect(handoff.enum).toEqual([...HANDOFF_ROLES]);
-    expect(handoff.enum).toEqual([...SpecialistRoleSchema.options]);
+    const waveUnits = HANDOFF_TOOL.input.properties["units"] as {
+      items: { properties: Record<string, { minItems?: number; enum?: readonly string[] }> };
+    };
+    expect(waveUnits.items.properties["role"]?.enum).toEqual([...HANDOFF_ROLES]);
+    expect(waveUnits.items.properties["role"]?.enum).toEqual([...SpecialistRoleSchema.options]);
     const gate = GATE_TOOL.input.properties["gate"] as { enum: readonly string[] };
     expect(gate.enum).toEqual(["INTENT", "DISCOVERY", "PLAN", "VERIFY", "REVIEW", "ACCEPT", "DELIVER"]);
     // The state tool declares the work-status enum. The handler and the Zod
@@ -148,15 +152,10 @@ describe("plugin registration contracts", () => {
     expect(evidence.enum).toEqual([...EvidenceRefSchema.shape.kind.options]);
     expect(evidence.enum).toContain("judgment");
     // The handoff carries the wave graph and the assigned skills.
-    expect(HANDOFF_TOOL.input.properties).toHaveProperty("skills");
-    expect(HANDOFF_TOOL.input.properties).toHaveProperty("dependsOn");
+    expect(waveUnits.items.properties).toHaveProperty("skills");
+    expect(waveUnits.items.properties).toHaveProperty("dependsOn");
     // A handoff must declare a scope: a unit with no boundary has no scope
     // to enforce, so the declared schema requires one.
-    const allowedScope = HANDOFF_TOOL.input.properties["allowedScope"] as { minItems?: number };
-    expect(allowedScope.minItems).toBe(1);
-    const waveUnits = HANDOFF_TOOL.input.properties["units"] as {
-      items: { properties: Record<string, { minItems?: number }> };
-    };
     expect(waveUnits.items.properties["allowedScope"]?.minItems).toBe(1);
   });
 });

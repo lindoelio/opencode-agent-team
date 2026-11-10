@@ -1,4 +1,4 @@
-import type { Phase, WorkStatus } from "./schemas.js";
+import type { EngagementClass, Phase, WorkStatus } from "./schemas.js";
 
 const PHASE_ORDER: Phase[] = [
   "INTENT",
@@ -27,17 +27,40 @@ const BACKWARD_EDGES: Record<Phase, Phase[]> = {
   DELIVER: ["ACCEPT"],
 };
 
-export function canTransitionPhase(from: Phase, to: Phase): boolean {
+/**
+ * The phases a class includes. A phase outside the class is rejected even
+ * when the generic forward edge would otherwise allow it.
+ */
+const CLASS_PHASES: Record<EngagementClass, readonly Phase[]> = {
+  fix: ["INTENT", "PLAN", "EXECUTE", "VERIFY", "REVIEW", "ACCEPT", "DELIVER"],
+  change: ["INTENT", "DISCOVER", "PLAN", "EXECUTE", "VERIFY", "REVIEW", "ACCEPT", "DELIVER"],
+  decision: [...PHASE_ORDER],
+};
+
+/** The declared shortcut edges, per class. The full path needs none. */
+const CLASS_SHORTCUTS: Record<EngagementClass, ReadonlyArray<readonly [Phase, Phase]>> = {
+  fix: [["INTENT", "PLAN"]],
+  change: [["DISCOVER", "PLAN"]],
+  decision: [],
+};
+
+export function phaseIncludedInClass(phase: Phase, engagementClass: EngagementClass): boolean {
+  return CLASS_PHASES[engagementClass].includes(phase);
+}
+
+export function canTransitionPhase(from: Phase, to: Phase, engagementClass: EngagementClass = "decision"): boolean {
   if (from === to) return true;
+  if (!phaseIncludedInClass(from, engagementClass) || !phaseIncludedInClass(to, engagementClass)) return false;
   const fi = PHASE_ORDER.indexOf(from);
   const ti = PHASE_ORDER.indexOf(to);
   if (ti === fi + 1) return true; // canonical forward step
+  if (CLASS_SHORTCUTS[engagementClass].some(([a, b]) => a === from && b === to)) return true;
   return (BACKWARD_EDGES[to] ?? []).includes(from) || (BACKWARD_EDGES[from] ?? []).includes(to);
 }
 
-export function validatePhaseTransition(from: Phase, to: Phase): void {
-  if (!canTransitionPhase(from, to)) {
-    throw new Error(`invalid phase transition: ${from} -> ${to}`);
+export function validatePhaseTransition(from: Phase, to: Phase, engagementClass: EngagementClass = "decision"): void {
+  if (!canTransitionPhase(from, to, engagementClass)) {
+    throw new Error(`invalid phase transition for ${engagementClass}: ${from} -> ${to}`);
   }
 }
 

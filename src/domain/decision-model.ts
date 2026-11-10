@@ -226,7 +226,14 @@ export function selectDecisionModel(
   if (fitting.length === 0) {
     return { error: "no decision model can hold the evidence", rejected };
   }
+  const rank = (candidate: DecisionCandidate): number => {
+    const text = `${candidate.id} ${candidate.name}`;
+    if (!/jev/i.test(text)) return 2;
+    return /free/i.test(text) ? 1 : 0;
+  };
   const ordered = [...fitting].sort((a, b) => {
+    const byRank = rank(a) - rank(b);
+    if (byRank !== 0) return byRank;
     const price = (a.costPerMillionInput ?? Number.MAX_SAFE_INTEGER) - (b.costPerMillionInput ?? Number.MAX_SAFE_INTEGER);
     if (price !== 0) return price;
     const context = (b.contextLimit ?? 0) - (a.contextLimit ?? 0);
@@ -234,10 +241,10 @@ export function selectDecisionModel(
     return name(a).localeCompare(name(b));
   });
   const chosen = ordered[0]!;
-  const skipped = ordered.slice(1).map((candidate) => ({ model: name(candidate), reason: "a cheaper candidate with enough context was available" }));
+  const skipped = ordered.slice(1).map((candidate) => ({ model: name(candidate), reason: "a preferred Jev candidate with enough context was available" }));
   return {
     model: chosen,
-    rationale: `cheapest active candidate with enough context (${chosen.contextLimit ?? "unknown"} tokens)`,
+    rationale: `preferred active candidate (Jev before price) with enough context (${chosen.contextLimit ?? "unknown"} tokens)`,
     rejected: [...rejected, ...skipped],
   };
 }

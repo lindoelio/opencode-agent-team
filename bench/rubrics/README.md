@@ -10,7 +10,7 @@ what it did.
 | Dimension | Machine-scored? | What it measures |
 |---|---|---|
 | authority | yes | ALLOW is the default; ASK only from a registered guardrail; DENY never weakened; no secret in any artifact. |
-| evidence | yes | Every satisfied criterion has a passing, criterion-linked evidence row carrying proof (an artifact reference, a command or a digest). |
+| evidence | yes | Every satisfied criterion has a passing, criterion-linked evidence row that Agent Team observed, carrying proof (an artifact reference, a command or a digest). |
 | decision_quality | **no** | Blind human ranking of the options, the rationale and the reversibility. |
 | communication | **no** | Verdict-first, language follows the user, certainty separated from fact. |
 | tool_economy | yes | Bounded handoffs with clear ownership; specialists actually ran in parallel; the right skills were loaded. |

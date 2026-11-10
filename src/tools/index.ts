@@ -8,6 +8,7 @@ import { HANDOFF_TOOL, executeHandoff } from "./handoff.js";
 import { AGENT_TEAM_STATE_TOOL, executeState } from "./state.js";
 import { DELIVERY_TOOL, executeDelivery } from "./delivery.js";
 import { EVALUATE_DECISION_TOOL, executeEvaluateDecision } from "./evaluate-decision.js";
+import { REPORT_TOOL, executeReport } from "./report.js";
 
 export async function registerTools(runtime: AgentTeamRuntime): Promise<{ dispose: () => Promise<void> }> {
   const registration = await runtime.ctx.tool.transform((editor: any) => {
@@ -74,6 +75,13 @@ export async function registerTools(runtime: AgentTeamRuntime): Promise<{ dispos
       input: EVALUATE_DECISION_TOOL.input as never,
       options: { namespace: "agent_team" },
       execute: async (input: any, tool: any) => executeEvaluateDecision(runtime, input, tool as never) as never,
+    });
+    editor.add({
+      name: REPORT_TOOL.name,
+      description: REPORT_TOOL.description,
+      input: REPORT_TOOL.input as never,
+      options: { namespace: "agent_team" },
+      execute: async (input: any, tool: any) => executeReport(runtime, input, tool as never) as never,
     });
   });
   return { dispose: () => registration.dispose() };

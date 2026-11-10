@@ -5,11 +5,31 @@ describe("evidence gate", () => {
   it("passes only with criterion-linked evidence", () => {
     const r = evaluateAcceptGate({
       criteria: ["AC-001"],
-      evidence: [{ id: "EVD-0001", criterionId: "AC-001", kind: "test", status: "pass", summary: "unit pass", command: "npm test", observedAt: new Date().toISOString(), limitations: [] }],
+      evidence: [{ id: "EVD-0001", criterionId: "AC-001", kind: "test", status: "pass", summary: "unit pass", command: "npm test", observedAt: new Date().toISOString(), observed: true, limitations: [] }],
       findings: [],
     });
     expect(r.result).toBe("PASS");
   });
+  it("refuses an unobserved pass", () => {
+    const r = evaluateAcceptGate({
+      criteria: ["AC-001"],
+      evidence: [{ id: "E", criterionId: "AC-001", kind: "test", status: "pass", summary: "typed", command: "npm test", observedAt: "t", limitations: [] }],
+      findings: [],
+    });
+    expect(r.result).toBe("FAIL");
+    expect(r.missing).toContain("AC-001");
+  });
+
+  it("refuses a critical finding", () => {
+    const r = evaluateAcceptGate({
+      criteria: ["AC-001"],
+      evidence: [{ id: "E", criterionId: "AC-001", kind: "test", status: "pass", summary: "ok", command: "npm test", observedAt: "t", observed: true, limitations: [] }],
+      findings: [{ severity: "critical" }],
+    });
+    expect(r.result).toBe("FAIL");
+    expect(r.nextAction).toContain("critical");
+  });
+
   it("fails without evidence", () => {
     const r = evaluateAcceptGate({ criteria: ["AC-001"], evidence: [], findings: [] });
     expect(r.result).toBe("FAIL");

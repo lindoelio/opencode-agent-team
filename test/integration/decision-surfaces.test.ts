@@ -78,7 +78,7 @@ describe("the decision transparency surfaces", () => {
     expect(decisionChecks.every((c) => c.status === "PASS")).toBe(true);
   });
 
-  it("injects the decision block into the session context of a team role", async () => {
+  it("does not advertise the decision catalog on every turn", async () => {
     const { runtime } = await fresh([DECISION_MODEL]);
     const cap: Captured = { sessionHooks: {} };
     const hooked = createRuntime(mockCtx((runtime.ctx as unknown as { location: { project: { canonical: string } } }).location.project.canonical, cap, [DECISION_MODEL]), runtime.options);
@@ -87,32 +87,12 @@ describe("the decision transparency surfaces", () => {
     const leader = { agent: "team-leader", system: [] as unknown[], options: {}, tools: {} } as never;
     await cbs[0]!(leader);
     const text = (leader as { system: Array<{ text: string }> }).system.map((s) => s.text).join("\n");
-    expect(text).toContain("Decision models:");
-    expect(text).toContain("openrouter/jev");
-    expect(text).toContain("Thresholds in force:");
-    expect(text).toContain("never approves a criterion");
+    expect(text).not.toContain("Decision models:");
+    expect(text).not.toContain("Thresholds in force:");
     await reg.dispose();
   });
 
-  it("gives the reviewer a stricter threshold than the leader in the context block", async () => {
-    const { runtime } = await fresh([DECISION_MODEL]);
-    const root = (runtime.ctx as unknown as { location: { project: { canonical: string } } }).location.project.canonical;
-    const cap: Captured = { sessionHooks: {} };
-    const hooked = createRuntime(mockCtx(root, cap, [DECISION_MODEL]), runtime.options);
-    const reg = await registerContextHook(hooked);
-    const cbs = cap.sessionHooks["context"]!;
-    const leader = { agent: "team-leader", system: [] as unknown[], options: {}, tools: {} } as never;
-    const reviewer = { agent: "team-leader/reviewer", system: [] as unknown[], options: {}, tools: {} } as never;
-    await cbs[0]!(leader);
-    await cbs[0]!(reviewer);
-    const leaderText = (leader as { system: Array<{ text: string }> }).system.map((s) => s.text).join("\n");
-    const reviewerText = (reviewer as { system: Array<{ text: string }> }).system.map((s) => s.text).join("\n");
-    expect(leaderText).toContain("probability >= 0.85");
-    expect(reviewerText).toContain("probability >= 0.9");
-    await reg.dispose();
-  });
-
-  it("leaves a machine with no decision model exactly as it was", async () => {
+  it("leaves the context unchanged when no decision model is connected", async () => {
     const { runtime } = await fresh([]);
     const cap: Captured = { sessionHooks: {} };
     const root = (runtime.ctx as unknown as { location: { project: { canonical: string } } }).location.project.canonical;
@@ -122,8 +102,8 @@ describe("the decision transparency surfaces", () => {
     const leader = { agent: "team-leader", system: [] as unknown[], options: {}, tools: {} } as never;
     await cbs[0]!(leader);
     const text = (leader as { system: Array<{ text: string }> }).system.map((s) => s.text).join("\n");
-    expect(text).toContain("0 available");
-    expect(text).toContain("never approves a criterion");
+    expect(text).not.toContain("Decision models:");
+    expect(text).not.toContain("Thresholds in force:");
     await reg.dispose();
   });
 });

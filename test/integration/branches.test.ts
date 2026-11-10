@@ -21,14 +21,14 @@ const leader = { sessionID: "sess-1", agent: "team-leader" } as never;
 
 function runtimeFor(root: string, options: Record<string, unknown> = {}): AgentTeamRuntime {
   return createRuntime(
-    { location: { project: { canonical: root } }, options: {} } as never,
+    { location: { project: { canonical: root } }, options: {}, app: { version: "2.2.0" }, session: { create: async () => ({ id: "ses_child" }), prompt: async () => ({}) } } as never,
     {
       profile: "public",
       strictEvidence: true,
       projectState: ".agent-team",
       telemetry: false,
       autonomy: { mode: "yolo", askBefore: [] },
-      orchestration: { maxParallelSpecialists: 6 },
+      orchestration: { maxParallelSpecialists: 6, allowedCheckPrefixes: [] },
       ...options,
     },
   );
@@ -98,7 +98,7 @@ describe("optional inputs and absent defaults", () => {
     await expect(
       executeState(
         runtime,
-        { action: "transition", expectedRevision: 2, to: "FRAME", reason: "r", nextAction: "n", status: "DELIVERED" },
+        { action: "transition", expectedRevision: 2, to: "DISCOVER", reason: "r", nextAction: "n", status: "DELIVERED" },
         leader,
       ),
     ).rejects.toThrow(/invalid status transition/);
@@ -136,7 +136,7 @@ describe("optional inputs and absent defaults", () => {
       (
         await executeEvidence(
           runtime,
-          { expectedRevision: 1, criterionId: "AC-1", kind: "source", status: "pass", summary: "s", artifactRef: "f", observedAt: "t" },
+          { expectedRevision: 1, criterionId: "AC-1", kind: "source", status: "partial", summary: "s", artifactRef: "f", observedAt: "t" },
           leader,
         )
       ).content,
@@ -232,7 +232,7 @@ describe("the doctor reports what it found", () => {
       tool: { list: async () => [{ id: "agent_team_state" }], transform: async () => ({ dispose: async () => {} }), hook: noop },
       command: { transform: async () => ({ dispose: async () => {} }) },
       skill: { transform: async () => ({ dispose: async () => {} }) },
-      session: { hook: noop },
+      session: { hook: noop, create: async () => ({ id: "ses_child" }), prompt: async () => ({}) },
       agent: { list: async () => [{ id: "team-leader" }] },
       storage: { set: async () => {}, get: async () => undefined, remove: async () => {} },
       permission: { hook: noop },
@@ -240,16 +240,16 @@ describe("the doctor reports what it found", () => {
     } as never;
   }
 
-  it("marks an unsupported host version as DEGRADED and names it", async () => {
+  it("fails a host below the floor and names it", async () => {
     const root = await freshRoot();
     const report = await runDoctor(createRuntime(hostCtx(root, "1.19.5"), runtimeFor(root).options));
     const version = report.checks.find((c) => c.name === "OpenCode")!;
-    expect(version.status).toBe("DEGRADED");
+    expect(version.status).toBe("FAIL");
     expect(version.detail).toContain("1.19.5");
   });
 
-  it("marks every supported host version as PASS", async () => {
-    for (const version of ["2.0.10", "2.1.4", "2.2.0"]) {
+  it("passes 2.2.0 and newer", async () => {
+    for (const version of ["2.2.0", "2.2.7", "2.3.0"]) {
       const root = await freshRoot();
       const report = await runDoctor(createRuntime(hostCtx(root, version), runtimeFor(root).options));
       expect(report.checks.find((c) => c.name === "OpenCode")!.status, version).toBe("PASS");
@@ -274,7 +274,7 @@ describe("the doctor reports what it found", () => {
 
   it("fails the host surface when a required surface is missing", async () => {
     const root = await freshRoot();
-    const ctx = hostCtx(root, "2.0.10", { skill: undefined });
+    const ctx = hostCtx(root, "2.2.0", { skill: undefined });
     const report = await runDoctor(createRuntime(ctx, runtimeFor(root).options));
     const surface = report.checks.find((c) => c.name === "Host API surface")!;
     expect(surface.status).toBe("FAIL");
@@ -283,7 +283,7 @@ describe("the doctor reports what it found", () => {
 
   it("reports a configured reasoning effort that the catalog does not offer", async () => {
     const root = await freshRoot();
-    const ctx = hostCtx(root, "2.0.10", { model: { list: async () => [{ id: "m", providerID: "p", variants: [{ id: "low" }] }] } });
+    const ctx = hostCtx(root, "2.2.0", { model: { list: async () => [{ id: "m", providerID: "p", variants: [{ id: "low" }] }] } });
     const runtime = createRuntime(ctx, runtimeFor(root, { model: { reasoningEffort: "high" } }).options);
     const report = await runDoctor(runtime);
     const effort = report.checks.find((c) => c.name === "Reasoning effort")!;

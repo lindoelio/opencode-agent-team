@@ -4,9 +4,10 @@ import { SKILL_IDS, loadSkillContents, frontmatterName, frontmatterDescription }
 import { AGENT_TEMPLATES, loadTemplates } from "../../src/catalog/agents.js";
 
 describe("registration contracts", () => {
-  it("exposes the documented command set", () => {
+  it("exposes only the operator commands", () => {
     const names = AGENT_TEAM_COMMANDS.map((c) => c.name);
-    for (const expected of [
+    expect(names.sort()).toEqual(["agent-team/doctor", "agent-team/guard", "agent-team/setup"]);
+    for (const removed of [
       "agent-team/start",
       "agent-team/discover",
       "agent-team/thesis",
@@ -17,12 +18,10 @@ describe("registration contracts", () => {
       "agent-team/deliver",
       "agent-team/status",
       "agent-team/why",
-      "agent-team/guard",
-      "agent-team/setup",
-      "agent-team/doctor",
+      "agent-team/decisions",
       "agent-team/export",
     ]) {
-      expect(names).toContain(expected);
+      expect(names).not.toContain(removed);
     }
     // Every command carries a name, a description and a prompt.
     for (const command of AGENT_TEAM_COMMANDS) {

@@ -17,10 +17,10 @@ function baseCtx(root: string, overrides: Record<string, unknown> = {}): never {
   return {
     options: {},
     location: { project: { canonical: root } },
-    app: { version: "2.0.10" },
+    app: { version: "2.2.0" },
     model: { list: async () => [{ providerID: "opencode", id: "muse-spark-1.3" }], reload: async () => {} },
     generate: { text: async () => ({ text: "doctor-ok" }) },
-    tool: { transform: async () => ({ dispose: async () => {} }), reload: async () => {}, list: async () => [{ id: "agent_team_state" }, { id: "agent_team_record_assumption" }, { id: "agent_team_record_decision" }, { id: "agent_team_submit_evidence" }, { id: "agent_team_evaluate_gate" }, { id: "agent_team_evaluate_decision" }, { id: "agent_team_request_approval" }, { id: "agent_team_handoff" }, { id: "agent_team_define_delivery" }], hook: async () => ({ dispose: async () => {} }) },
+    tool: { transform: async () => ({ dispose: async () => {} }), reload: async () => {}, list: async () => [{ id: "agent_team_state" }, { id: "agent_team_record_assumption" }, { id: "agent_team_record_decision" }, { id: "agent_team_submit_evidence" }, { id: "agent_team_evaluate_gate" }, { id: "agent_team_evaluate_decision" }, { id: "agent_team_request_approval" }, { id: "agent_team_handoff" }, { id: "agent_team_define_delivery" }, { id: "agent_team_report" }], hook: async () => ({ dispose: async () => {} }) },
     agent: { list: async () => [{ id: "team-leader" }] },
     storage: (() => {
       const data = new Map<string, unknown>();
@@ -33,7 +33,7 @@ function baseCtx(root: string, overrides: Record<string, unknown> = {}): never {
     })(),
     command: { transform: async () => ({ dispose: async () => {} }), reload: async () => {}, list: async () => [] },
     skill: { transform: async () => ({ dispose: async () => {} }), reload: async () => {}, list: async () => [] },
-    session: { hook: async () => ({ dispose: async () => {} }), synthetic: async () => {}, prompt: async () => {}, generate: async () => ({ text: "" }) },
+    session: { hook: async () => ({ dispose: async () => {} }), synthetic: async () => {}, prompt: async () => {}, create: async () => ({ id: "ses_child" }), shell: async () => ({ exitCode: 0, output: "ok" }), generate: async () => ({ text: "" }) },
     permission: { hook: async () => ({ dispose: async () => {} }), list: async () => [], get: async () => undefined, reply: async () => {} },
     ...overrides,
   } as never;
@@ -45,7 +45,7 @@ describe("doctor", () => {
     const runtime = createRuntime(baseCtx(root), OPTS);
     const report = await runDoctor(runtime);
     expect(report.verdict).toBe("PASS");
-    expect(report.opencodeVersion).toBe("2.0.10");
+    expect(report.opencodeVersion).toBe("2.2.0");
     const text = renderDoctorReport(report);
     expect(text).toContain("Agent Team Doctor — PASS");
     expect(text).toContain("Recommended action");
@@ -64,11 +64,12 @@ describe("doctor", () => {
     expect(report.verdict).toBe("FAIL");
     expect(report.checks.find((c) => c.name === "Model catalog")?.status).toBe("FAIL");
   });
-  it("degrades on wrong OpenCode version", async () => {
+  it("fails on a host below the floor", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-doctor-"));
-    const runtime = createRuntime(baseCtx(root, { app: { version: "1.0.0" } }), OPTS);
+    const runtime = createRuntime(baseCtx(root, { app: { version: "2.1.4" } }), OPTS);
     const report = await runDoctor(runtime);
-    expect(report.checks.find((c) => c.name === "OpenCode")?.status).toBe("DEGRADED");
+    expect(report.checks.find((c) => c.name === "OpenCode")?.status).toBe("FAIL");
+    expect(report.verdict).toBe("FAIL");
   });
   it("handles catalog failures and missing specialists", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-doctor-"));
@@ -137,21 +138,16 @@ describe("command handlers", () => {
     }
   }
 
-  it("setup --plan dry-runs, status handles empty state, export previews", async () => {
+  it("setup --plan dry-runs and only operator commands are registered", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-cmd-"));
     const { defs, sent } = await captureCommands(root);
-    expect(defs).toHaveLength(15);
+    expect(defs).toHaveLength(3);
+    expect(defs.map((d) => d.name).sort()).toEqual(["agent-team/doctor", "agent-team/guard", "agent-team/setup"]);
     const setup = defs.find((d) => d.name === "agent-team/setup")!;
     await withConfigHome(() => setup.execute({ sessionID: "s", prompt: { text: "/agent-team/setup --plan" }, delivery: "steer" } as never));
     expect(sent.join("\n")).toContain("Dry run only");
-    const status = defs.find((d) => d.name === "agent-team/status")!;
-    await status.execute({ sessionID: "s", prompt: { text: "/agent-team/status" }, delivery: "steer" } as never);
-    expect(sent.join("\n")).toContain("no engagement yet");
-    const exp = defs.find((d) => d.name === "agent-team/export")!;
-    await exp.execute({ sessionID: "s", prompt: { text: "/agent-team/export" }, delivery: "steer" } as never);
-    expect(sent.join("\n")).toContain("choose bundle");
   });
-  it("setup --apply writes agents and status reflects state", async () => {
+  it("setup --apply writes agents", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-cmd-"));
     await initializeState({ projectRoot: root, sessionId: "s", actor: "team-leader", outcome: "Win" });
     const { defs, sent } = await captureCommands(root);
@@ -159,9 +155,6 @@ describe("command handlers", () => {
     await withConfigHome(() => setup.execute({ sessionID: "s", prompt: { text: "/agent-team/setup --apply --scope project" }, delivery: "steer" } as never));
     expect(sent.join("\n")).toContain("Agent Team setup applied");
     expect(await fs.promises.readFile(path.join(root, ".opencode", "agents", "team-leader.md"), "utf8")).toContain("You are Team Leader");
-    const status = defs.find((d) => d.name === "agent-team/status")!;
-    await status.execute({ sessionID: "s", prompt: { text: "/agent-team/status" }, delivery: "steer" } as never);
-    expect(sent.join("\n")).toContain("Verdict: INTENT / DRAFT");
   });
   it("global setup plans without writing, doctor command runs", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-cmd-"));
@@ -305,15 +298,17 @@ describe("command handlers", () => {
     await guard.execute({ sessionID: "s", prompt: { text: "/agent-team/guard --mode nope" }, delivery: "steer" } as never);
     expect(sent.join("\n")).toContain("Invalid --mode");
   });
-  it("loop commands forward structured prompts", async () => {
+  it("guard records promotion authorization", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-cmd-"));
+    await initializeState({ projectRoot: root, sessionId: "s", actor: "team-leader", outcome: "Win" });
     const { defs, sent } = await captureCommands(root);
-    const start = defs.find((d) => d.name === "agent-team/start")!;
-    await start.execute({ sessionID: "s", prompt: { text: "agent-team/start build a board" }, delivery: "steer" } as never);
-    expect(sent.join("\n")).toContain("PROMPT:");
-    // slash-prefixed text that is not this command falls through untouched
-    await start.execute({ sessionID: "s", prompt: { text: "/something-else entirely" }, delivery: "steer" } as never);
-    expect(sent.join("\n")).toContain("something-else");
+    const guard = defs.find((d) => d.name === "agent-team/guard")!;
+    await guard.execute({ sessionID: "s", prompt: { text: "/agent-team/guard --allow-promotion" }, delivery: "steer" } as never);
+    expect(sent.join("\n")).toContain("Promotion: authorized");
+    const { readState } = await import("../../src/ledger/store.js");
+    expect((await readState(root))?.allowPromotion).toBe(true);
+    await guard.execute({ sessionID: "s", prompt: { text: "/agent-team/guard --no-promotion" }, delivery: "steer" } as never);
+    expect((await readState(root))?.allowPromotion).toBe(false);
   });
   it("registers every skill with autoinvoke off", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-cmd-"));

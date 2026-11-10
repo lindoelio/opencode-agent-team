@@ -13,11 +13,11 @@ session, and it keeps its own state in the project directory.
 
 ```mermaid
 flowchart TD
-  Host["OpenCode host — 2.0.x, 2.1.x or 2.2.x"]
+  Host["OpenCode host — 2.2.0 or newer"]
   Entry["src/index.ts — Plugin.define"]
-  Commands["catalog — 15 commands"]
+  Commands["catalog — 3 operator commands"]
   Skills["catalog — 18 skills"]
-  Tools["tools — 9 agent_team tools"]
+  Tools["tools — 10 agent_team tools"]
   Hooks["hooks — context, prompt, permission, retry, tool-audit"]
   Domain["domain — authority, gates, evidence, scope, state machine, schemas"]
   Ledger["ledger — store, events, projection, redaction, migrations"]
@@ -163,11 +163,12 @@ and a broken chain fails closed.
 
 ### Ownership
 
-**Only `team-leader` writes the ledger.** A specialist returns a
-`SpecialistResult@1`; the leader records it. This is what makes "one accountable
-orchestrator" mechanical rather than a convention, and it is why parallel
-specialists cannot contend on the revision. `agent_team_handoff` with
-`action: "prepareWave"` books a whole wave in one call and therefore one revision.
+**Only `team-leader` writes the ledger.** A specialist calls
+`agent_team_report` from its launched session; the plugin actor records the
+`SpecialistResult@1`, and the leader does not retype it. This is what makes
+"one accountable orchestrator" mechanical rather than a convention, and it is
+why parallel specialists cannot contend on the revision. `agent_team_handoff`
+with `action: "launch"` creates one child session per unit and one revision.
 
 **One directory is the exception.** `judgements/` holds one document per
 executed decision, written by whichever specialist ran the decision. It is
@@ -181,7 +182,7 @@ document; it is a record of what was asked, not tamper-evident proof of it.
 `src/ledger/projection.ts` turns the full state into a compact
 `StateProjection`, rendered as YAML and injected into every Agent Team session by
 the context hook. The projection is what the leader reads; the event log is what
-the system audits. `/agent-team/status` answers from the projection and is
+the system audits. A status question is answered from the projection and is
 instructed never to dump the raw event log.
 
 ## The delivery loop
@@ -317,13 +318,14 @@ worker, reviewer, security and release specialists.
 
 ## Host compatibility
 
-The plugin is verified against `@opencode/plugin` 2.0.10, 2.1.4 and 2.2.0. Two
-things change across those lines, and both are handled in `src/compat/host.ts`:
+The plugin requires OpenCode 2.2.0 or newer and is verified against
+`@opencode/plugin` 2.2.0. The host floor and the required team surfaces are
+handled in `src/compat/host.ts`:
 
-- The generation API moved. `ctx.experimental.generate.text` is the full API on
-  2.2.x; `ctx.generate.text` is the fallback for 2.0.x and 2.1.x and is
-  deprecated on 2.2.x. The plugin **resolves the surface by feature detection, not
-  by version number**, so it survives the next rename.
+- The generation API is `ctx.experimental.generate.text` on 2.2.x. The plugin
+  **resolves the surface by feature detection, not by version number**, so it
+  survives the next rename. `ctx.generate.text` is accepted only as a fallback
+  when the experimental surface is absent.
 - Optional surfaces appear over time (`ctx.credential`, `ctx.permission.assert`).
   The plugin does not depend on them; the doctor reports them so an operator can
   see the host they are actually running.

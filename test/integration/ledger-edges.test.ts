@@ -76,7 +76,7 @@ describe("the v1 to v2 migration", () => {
     fs.writeFileSync(path.join(root, ".agent-team", "state.json"), JSON.stringify(v1));
     const { readState } = await import("../../src/ledger/store.js");
     const migrated = await readState(root);
-    expect(migrated?.schemaVersion).toBe(2);
+    expect(migrated?.schemaVersion).toBe(3);
     // the v1 role name becomes the v2 one
     expect(migrated?.handoffs[0]?.role).toBe("reviewer");
     // the v1 gate name becomes the v2 one
@@ -128,7 +128,7 @@ describe("the optional fields every tool accepts", () => {
 
   function runtimeFor(root: string): ReturnType<typeof createRuntime> {
     return createRuntime(
-      { location: { project: { canonical: root } }, options: {} } as never,
+      { location: { project: { canonical: root } }, options: {}, app: { version: "2.2.0" }, session: { create: async () => ({ id: "ses_child" }), prompt: async () => ({}) } } as never,
       { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false, autonomy: { mode: "yolo", askBefore: [] } } as never,
     );
   }

@@ -37,8 +37,10 @@ export async function executeEvidence(runtime: AgentTeamRuntime, rawInput: unkno
   if (!parsed.success) throw new Error(`invalid evidence input: ${parsed.error.message}`);
   const input = parsed.data;
   const isJudgement = input.kind === "judgment";
-  if (!isJudgement && input.status === "pass" && !input.artifactRef && !input.command && !input.digest) {
-    throw new Error("pass requires artifactRef, command, or digest (exit code alone is not evidence)");
+  if (!isJudgement && input.status === "pass") {
+    throw new Error(
+      "a pass is recorded only when Agent Team ran the check through the host; submit the declared check instead of a typed pass",
+    );
   }
   const { projectRoot, current, ctx } = await openLedger(runtime, tool, input.expectedRevision, "submit evidence");
   // Refuse evidence for unknown criterion unless the delivery declares it — prevents unlinked claims.

@@ -1,26 +1,27 @@
 /**
  * Host compatibility for the OpenCode plugin SDK.
  *
- * The plugin supports the 2.0.x, 2.1.x and 2.2.x lines of the OpenCode host.
- * Two things change across those lines and both are handled here:
+ * The plugin requires OpenCode 2.2.0 or newer. Older hosts are refused rather
+ * than degraded: the team runtime needs a child session, and a 2.1 host does
+ * not expose the decision and instruction surfaces the loop is built on.
  *
- * 1. The generation API moved. `ctx.generate` is the full `GenerateApi` on
- *    2.0.x/2.1.x and a deprecated `Pick<GenerateApi, "text">` on 2.2.x, where
- *    `ctx.experimental.generate` is the full API. The plugin resolves the
- *    generator by feature detection rather than by version number, so it is
- *    correct on every supported line and survives the next rename.
- *
- * 2. New optional surfaces appear (`ctx.credential` on 2.1.x,
- *    `ctx.permission.assert` and `ctx.experimental.generate` on 2.2.x). The
- *    plugin does not depend on them; the doctor reports them so an operator
- *    can see which host they are actually running.
+ * A surface is still detected, never assumed from the version string. A host
+ * that reports 2.2.0 but cannot create a session is refused at launch, and the
+ * doctor names the missing surface.
  */
 
 /** Host lines this plugin is verified against. */
-export const SUPPORTED_HOST_LINES = ["2.0", "2.1", "2.2"] as const;
+export const SUPPORTED_HOST_LINES = ["2.2"] as const;
+
+/** The minimum host version. */
+export const MINIMUM_HOST_VERSION = "2.2.0" as const;
 
 /** The npm range of `@opencode/plugin` this plugin supports. */
-export const SUPPORTED_SDK_RANGE = ">=2.0.10 <2.3.0";
+export const SUPPORTED_SDK_RANGE = ">=2.2.0 <2.3.0";
+
+/** The sentence a too-old host receives. One sentence, one place. */
+export const UPDATE_HOST_MESSAGE =
+  "Agent Team requires OpenCode 2.2.0 or newer. Update OpenCode, restart it, and talk to the leader again.";
 
 export type HostSupport = "supported" | "unsupported" | "unknown";
 
@@ -38,14 +39,25 @@ export function parseHostVersion(version: string): HostVersionInfo {
   const major = Number(match[1]);
   const minor = Number(match[2]);
   const patch = Number(match[3]);
-  const line = `${major}.${minor}`;
-  const supported = (SUPPORTED_HOST_LINES as readonly string[]).includes(line);
-  return { major, minor, patch, support: supported ? "supported" : "unsupported" };
+  return { major, minor, patch, support: atLeast(minor, patch, major) ? "supported" : "unsupported" };
 }
 
-/** Classifies a host version against the supported lines. */
+function atLeast(minor: number, patch: number, major: number): boolean {
+  if (major > 2) return true;
+  if (major < 2) return false;
+  if (minor > 2) return true;
+  if (minor < 2) return false;
+  return patch >= 0;
+}
+
+/** Classifies a host version against the supported floor. */
 export function hostVersionSupport(version: string): HostSupport {
   return parseHostVersion(version).support;
+}
+
+/** True when the host is at least OpenCode 2.2.0. */
+export function hostVersionAtLeast(version: string): boolean {
+  return parseHostVersion(version).support === "supported";
 }
 
 export class UnsupportedHostError extends Error {
@@ -66,9 +78,9 @@ interface GenerationSurface {
 }
 
 /**
- * Resolves the host's text generator. `ctx.experimental.generate.text` is
- * preferred (2.2.x); `ctx.generate.text` is the fallback for 2.0.x and
- * 2.1.x, and is still present but deprecated on 2.2.x.
+ * Resolves the host's text generator. `ctx.experimental.generate.text` is the
+ * full API on 2.2.x; `ctx.generate.text` is the deprecated fallback and is
+ * kept only so a 2.2 patch that still exposes it does not break the doctor.
  */
 export function resolveTextGenerator(ctx: unknown): TextGenerator {
   const surface = (ctx ?? {}) as GenerationSurface;
@@ -81,8 +93,64 @@ export function resolveTextGenerator(ctx: unknown): TextGenerator {
     return { text: (input: unknown) => legacy.text!(input) };
   }
   throw new UnsupportedHostError(
-    "this OpenCode host exposes no text-generation surface (neither ctx.experimental.generate.text nor ctx.generate.text); Agent Team requires OpenCode 2.0.x, 2.1.x or 2.2.x",
+    `this OpenCode host exposes no text-generation surface (neither ctx.experimental.generate.text nor ctx.generate.text). ${UPDATE_HOST_MESSAGE}`,
   );
+}
+
+/** The host's child-session surface, resolved by feature detection. */
+export interface SessionLauncher {
+  create(input: unknown): Promise<unknown>;
+  prompt(input: unknown): Promise<unknown>;
+  switchAgent?(input: unknown): Promise<unknown>;
+  wait?(input: unknown): Promise<unknown>;
+}
+
+export interface SessionSurface {
+  available: boolean;
+  launcher?: SessionLauncher;
+}
+
+export function resolveSessionLauncher(ctx: unknown): SessionSurface {
+  const surface = (ctx ?? {}) as {
+    session?: {
+      create?: (input: unknown) => Promise<unknown>;
+      prompt?: (input: unknown) => Promise<unknown>;
+      switchAgent?: (input: unknown) => Promise<unknown>;
+      wait?: (input: unknown) => Promise<unknown>;
+    };
+  };
+  const create = surface.session?.create;
+  const prompt = surface.session?.prompt;
+  if (typeof create !== "function" || typeof prompt !== "function") return { available: false };
+  return {
+    available: true,
+    launcher: {
+      create: (input: unknown) => create(input),
+      prompt: (input: unknown) => prompt(input),
+      ...(typeof surface.session?.switchAgent === "function" ? { switchAgent: (input: unknown) => surface.session!.switchAgent!(input) } : {}),
+      ...(typeof surface.session?.wait === "function" ? { wait: (input: unknown) => surface.session!.wait!(input) } : {}),
+    },
+  };
+}
+
+/** The host's shell surface, used to observe a check. Never a plugin process. */
+export interface ShellSurface {
+  available: boolean;
+  run?: (input: unknown) => Promise<unknown>;
+}
+
+export function resolveShellSurface(ctx: unknown): ShellSurface {
+  const surface = (ctx ?? {}) as {
+    shell?: { run?: (input: unknown) => Promise<unknown> };
+    session?: { shell?: (input: unknown) => Promise<unknown> };
+  };
+  if (typeof surface.session?.shell === "function") {
+    return { available: true, run: (input: unknown) => surface.session!.shell!(input) };
+  }
+  if (typeof surface.shell?.run === "function") {
+    return { available: true, run: (input: unknown) => surface.shell!.run!(input) };
+  }
+  return { available: false };
 }
 
 /**
@@ -120,7 +188,7 @@ export function describeHostCapabilities(ctx: unknown): string[] {
     experimental?: { generate?: { decisions?: unknown }; terminal?: unknown };
     credential?: unknown;
     permission?: { assert?: unknown };
-    session?: { hook?: unknown };
+    session?: { hook?: unknown; create?: unknown; shell?: unknown };
     tool?: { hook?: unknown };
     command?: { transform?: unknown };
     skill?: { transform?: unknown };
@@ -142,13 +210,24 @@ export function describeHostCapabilities(ctx: unknown): string[] {
   probe("credential", surface.credential);
   probe("permission.assert", surface.permission?.assert);
   probe("session.hook", surface.session?.hook);
+  probe("session.create", surface.session?.create);
   probe("tool.hook", surface.tool?.hook);
   probe("command.transform", surface.command?.transform);
   probe("skill.transform", surface.skill?.transform);
   probe("storage", surface.storage);
   probe("model.list", surface.model?.list);
   probe("agent.list", surface.agent?.list);
-  const required = ["session.hook", "tool.hook", "command.transform", "skill.transform", "storage", "model.list", "agent.list"];
+  probe("session.shell", surface.session?.shell);
+  const required = [
+    "session.hook",
+    "session.create",
+    "tool.hook",
+    "command.transform",
+    "skill.transform",
+    "storage",
+    "model.list",
+    "agent.list",
+  ];
   const missingRequired = required.filter((r) => absent.includes(r));
   if (missingRequired.length > 0) {
     return [`MISSING REQUIRED: ${missingRequired.join(", ")}`, ...present.map((p) => `present: ${p}`)];

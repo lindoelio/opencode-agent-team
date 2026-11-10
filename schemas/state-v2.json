@@ -6,12 +6,52 @@
   "properties": {
     "schemaVersion": {
       "type": "number",
-      "const": 2
+      "const": 3
     },
     "revision": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
+    },
+    "engagementClass": {
+      "type": "string",
+      "enum": [
+        "fix",
+        "change",
+        "decision"
+      ]
+    },
+    "route": {
+      "type": "object",
+      "properties": {
+        "engagementClass": {
+          "type": "string",
+          "enum": [
+            "fix",
+            "change",
+            "decision",
+            "clarify"
+          ]
+        },
+        "namesFileAndSymptom": {
+          "type": "boolean"
+        },
+        "riskSignal": {
+          "type": "boolean"
+        },
+        "model": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "engagementClass",
+        "namesFileAndSymptom",
+        "riskSignal"
+      ],
+      "additionalProperties": false
     },
     "project": {
       "type": "object",
@@ -159,6 +199,9 @@
         "yolo",
         "guarded"
       ]
+    },
+    "allowPromotion": {
+      "type": "boolean"
     },
     "assumptions": {
       "type": "array",
@@ -388,9 +431,37 @@
             "type": "string"
           }
         },
+        "criterionKinds": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "enum": [
+              "test",
+              "runtime",
+              "visual",
+              "source",
+              "review",
+              "release",
+              "document",
+              "metric"
+            ]
+          }
+        },
         "validationSteps": {
           "type": "array",
           "items": {
+            "type": "string"
+          }
+        },
+        "baselineFiles": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
             "type": "string"
           }
         },
@@ -553,6 +624,9 @@
           },
           "contractDigest": {
             "type": "string"
+          },
+          "treeDigest": {
+            "type": "string"
           }
         },
         "required": [
@@ -619,6 +693,9 @@
           },
           "observedAt": {
             "type": "string"
+          },
+          "observed": {
+            "type": "boolean"
           },
           "limitations": {
             "default": [],
@@ -961,9 +1038,17 @@
             "type": "string",
             "enum": [
               "prepared",
+              "running",
               "completed",
+              "failed",
               "cancelled"
             ]
+          },
+          "sessionID": {
+            "type": "string"
+          },
+          "parentSessionID": {
+            "type": "string"
           },
           "result": {}
         },

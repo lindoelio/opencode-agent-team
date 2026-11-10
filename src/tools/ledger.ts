@@ -3,6 +3,7 @@ import { projectRootOf } from "../runtime.js";
 import { readState, storeContext, type StoreContext } from "../ledger/store.js";
 import type { AgentTeamProjectStateV2 } from "../domain/schemas.js";
 import { assertLedgerOwner } from "./authority.js";
+import { assertSupportedHost } from "../orchestrator/host-gate.js";
 import type { ToolContext } from "@opencode/plugin/promise/tool";
 
 export interface LedgerContext {
@@ -25,6 +26,7 @@ export async function openLedger(
   expectedRevision: number,
   what: string,
 ): Promise<LedgerContext> {
+  assertSupportedHost(runtime);
   assertLedgerOwner(tool, what);
   const projectRoot = projectRootOf(runtime.ctx);
   const current = await readState(projectRoot);

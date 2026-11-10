@@ -29,7 +29,9 @@ function runtimeFor(root: string, options: HostOptions = {}, decisionMode?: "off
     };
   };
   const ctx = {
+    app: { version: "2.2.0" },
     location: { project: { canonical: root } },
+    session: { create: async () => ({ id: "ses_child" }), prompt: async () => ({}) },
     model: {
       list: async () =>
         options.model === false
@@ -59,7 +61,7 @@ async function projectWithDelivery(runtime: AgentTeamRuntime): Promise<string> {
       happyPath: ["one thin flow"],
       allowedScope: ["src"],
       acceptanceCriteria: ["criterion-one"],
-      validationSteps: ["run the tests"],
+      validationSteps: ["npm test"],
       rollback: "revert",
     },
     tool,
@@ -186,7 +188,9 @@ describe("a pinned decision model", () => {
     _resetHeldDecisionsForTests();
     _resetDecisionModelCatalogForTests();
     const ctx = {
+      app: { version: "2.2.0" },
       location: { project: { canonical: root } },
+      session: { create: async () => ({ id: "ses_child" }), prompt: async () => ({}) },
       model: {
         list: async () => [
           { id: "jev", modelID: "jev", providerID: "p", name: "Jev", type: "decision", enabled: true, status: "active", cost: [{ input: 0.05, output: 0 }], limit: { context: 32000 } },

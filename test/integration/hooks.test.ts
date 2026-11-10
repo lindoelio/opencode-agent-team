@@ -153,10 +153,10 @@ describe("hooks", () => {
     const deny = { action: "secret-expose", resources: [], effect: "allow" } as never;
     await cb(deny);
     expect((deny as unknown as { effect: string }).effect).toBe("deny");
-    // yolo: external/destructive actions stay allow, no elevation
+    // Promotion is denied, not asked. Local destructive work stays allowed.
     const push = { action: "git-push", resources: ["origin"], effect: "allow" } as never;
     await cb(push);
-    expect((push as unknown as { effect: string }).effect).toBe("allow");
+    expect((push as unknown as { effect: string }).effect).toBe("deny");
     const destructive = { action: "destructive", resources: ["prod-db"], effect: "allow" } as never;
     await cb(destructive);
     expect((destructive as unknown as { effect: string }).effect).toBe("allow");
@@ -165,7 +165,7 @@ describe("hooks", () => {
     await cb(preset);
     expect((preset as unknown as { effect: string; message: string }).effect).toBe("ask");
     expect((preset as unknown as { effect: string; message: string }).message).toBe("preset");
-    // state guardrail turns deploy into ask, and an exact approval satisfies it
+    // An ask-before guardrail does not authorize promotion.
     const { appendEvent, storeContext } = await import("../../src/ledger/store.js");
     await appendEvent(storeContext(root, "s", "team-leader"), "guardrails.updated", { add: ["deploy"] }, (s) => ({
       ...s,
@@ -173,19 +173,12 @@ describe("hooks", () => {
     }));
     const deploy = { action: "deploy", resources: ["staging"], effect: "allow" } as never;
     await cb(deploy);
-    expect((deploy as unknown as { effect: string }).effect).toBe("ask");
-    await appendEvent(storeContext(root, "s", "team-leader"), "approval.opened", { id: "APR-0001" }, (s) => ({
-      ...s,
-      approvals: [...s.approvals, { id: "APR-0001", category: "release" as const, requestedAction: "deploy", resources: ["staging"], reason: "needed", risks: [], status: "approved" as const, createdAt: new Date().toISOString() }],
-    }));
+    expect((deploy as unknown as { effect: string }).effect).toBe("deny");
+    // The recorded allow flag is the authorization, and it wins over the guardrail.
+    await appendEvent(storeContext(root, "s", "team-leader"), "guardrails.updated", { allowPromotion: true }, (s) => ({ ...s, allowPromotion: true }));
     const deploy2 = { action: "deploy", resources: ["staging"], effect: "allow" } as never;
     await cb(deploy2);
     expect((deploy2 as unknown as { effect: string }).effect).toBe("allow");
-    // state-level guarded mode restores legacy elevation for new actions
-    await appendEvent(storeContext(root, "s", "team-leader"), "guardrails.updated", { mode: "guarded" }, (s) => ({ ...s, autonomyMode: "guarded" as const }));
-    const push2 = { action: "git-push", resources: ["origin"], effect: "allow" } as never;
-    await cb(push2);
-    expect((push2 as unknown as { effect: string }).effect).toBe("ask");
     expect(isValidationSafe("npm test -- run")).toBe(true);
     expect(isValidationSafe("git push origin main")).toBe(false);
     expect(isValidationSafe("rm -rf /")).toBe(false);

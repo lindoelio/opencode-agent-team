@@ -13,11 +13,12 @@ import { executeHandoff } from "../../src/tools/handoff.js";
 import { executeDelivery } from "../../src/tools/delivery.js";
 import { readState } from "../../src/ledger/store.js";
 import { projectRootOf } from "../../src/runtime.js";
+import { recordObservedEvidence } from "../../src/orchestrator/observe.js";
 
 function runtimeFor(root: string): AgentTeamRuntime {
   return createRuntime(
-    { location: { project: { canonical: root } }, options: {} } as never,
-    { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false, autonomy: { mode: "yolo", askBefore: [] }, orchestration: { maxParallelSpecialists: 6 } },
+    { location: { project: { canonical: root } }, options: {}, app: { version: "2.2.0" }, session: { create: async () => ({ id: "ses_child" }), prompt: async () => ({}) } } as never,
+    { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false, autonomy: { mode: "yolo", askBefore: [] }, orchestration: { maxParallelSpecialists: 6, allowedCheckPrefixes: [] } },
   );
 }
 
@@ -105,23 +106,24 @@ describe("agent-team tools end to end", () => {
     expect(doc).toContain("# DEC-0001: T");
     await expect(executeDecision(runtime, { expectedRevision: 1, ...DECISION_BASE }, tool)).rejects.toThrow(/stale/);
   });
-  it("evidence: requires proof, binds criterion, writes file", async () => {
+  it("evidence: refuses a typed pass and records an observed check", async () => {
     const { runtime, root } = await freshRuntime();
     await executeState(runtime, { action: "initialize", outcome: "O" }, tool);
-    await expect(executeEvidence(runtime, { expectedRevision: 0, criterionId: "AC-1", kind: "test", status: "pass", summary: "s", observedAt: "t" }, tool)).rejects.toThrow(/requires artifactRef/);
-    const ok = JSON.parse((await executeEvidence(runtime, { expectedRevision: 0, criterionId: "AC-1", kind: "test", status: "pass", summary: "green", command: "npm test", observedAt: "2026-01-01" }, tool)).content);
-    expect(ok.id).toBe("EVD-0001");
+    await expect(executeEvidence(runtime, { expectedRevision: 0, criterionId: "AC-1", kind: "test", status: "pass", summary: "s", observedAt: "t" }, tool)).rejects.toThrow(/only when Agent Team ran the check/);
+    const ok = await recordObservedEvidence(root, { criterionId: "AC-1", kind: "test", summary: "green", command: "npm test", exitCode: 0, output: "ok" });
+    expect(ok.id).toMatch(/^EVD-/);
+    expect(ok.observed).toBe(true);
     expect(ok.digest?.length).toBeGreaterThan(0);
-    const stored = await fs.promises.readFile(path.join(root, ".agent-team", "evidence", "EVD-0001.json"), "utf8");
-    expect(stored).toContain("green");
+    const state = await readState(root);
+    expect(state?.evidence.some((e) => e.id === ok.id && e.observed === true)).toBe(true);
   });
   it("evidence: accepts any criterion when no delivery declares criteria", async () => {
-    const { runtime } = await freshRuntime();
+    const { runtime, root } = await freshRuntime();
     await executeState(runtime, { action: "initialize", outcome: "O" }, tool);
     // Without a delivery there are no declared criteria, so any criterion id
     // is accepted: the gate has nothing to link the evidence to.
-    const ok = JSON.parse((await executeEvidence(runtime, { expectedRevision: 0, criterionId: "WHATEVER", kind: "source", status: "pass", summary: "s", artifactRef: "f", observedAt: "t" }, tool)).content);
-    expect(ok.id).toBe("EVD-0001");
+    const ok = await recordObservedEvidence(root, { criterionId: "WHATEVER", kind: "source", summary: "s", command: "grep -q x src/a.ts", exitCode: 0, output: "x" });
+    expect(ok.id).toMatch(/^EVD-/);
   });
   it("evidence: rejects an unknown criterion when the delivery declares criteria", async () => {
     const { runtime } = await freshRuntime();
@@ -139,11 +141,11 @@ describe("agent-team tools end to end", () => {
     }));
     // A criterion the delivery does not declare is refused.
     await expect(
-      executeEvidence(runtime, { expectedRevision: planted.revision, criterionId: "AC-999", kind: "source", status: "pass", summary: "s", artifactRef: "f", observedAt: "t" }, tool),
+      executeEvidence(runtime, { expectedRevision: planted.revision, criterionId: "AC-999", kind: "source", status: "partial", summary: "s", artifactRef: "f", observedAt: "t" }, tool),
     ).rejects.toThrow(/unknown criterionId/);
-    // A declared criterion is accepted.
-    const ok = JSON.parse((await executeEvidence(runtime, { expectedRevision: planted.revision, criterionId: "AC-1", kind: "source", status: "pass", summary: "s", artifactRef: "f", observedAt: "t" }, tool)).content);
-    expect(ok.id).toBe("EVD-0001");
+    // A declared criterion is accepted as a partial row.
+    const ok = JSON.parse((await executeEvidence(runtime, { expectedRevision: planted.revision, criterionId: "AC-1", kind: "source", status: "partial", summary: "s", artifactRef: "f", observedAt: "t" }, tool)).content);
+    expect(ok.id).toMatch(/^EVD-/);
   });
   it("gate: evaluates INTENT/PLAN/VERIFY/ACCEPT/DELIVER from ledger", async () => {
     const { runtime } = await freshRuntime();
@@ -172,7 +174,7 @@ describe("agent-team tools end to end", () => {
     }));
     await executeAssumption(runtime, { expectedRevision: planted.revision, statement: "risky", basis: "INFERENCE", confidence: "low", impact: "high" }, tool);
     const afterAsm = await readStateSafe(runtime);
-    await executeEvidence(runtime, { expectedRevision: afterAsm, criterionId: "AC-1", kind: "test", status: "pass", summary: "s", command: "npm test", observedAt: "t" }, tool);
+    await recordObservedEvidence(root, { criterionId: "AC-1", kind: "test", summary: "s", command: "npm test", exitCode: 0, output: "ok" });
     const afterEvd = await readStateSafe(runtime);
     const verify = JSON.parse((await executeGate(runtime, { gate: "VERIFY", claim: "v", expectedRevision: afterEvd }, tool)).content);
     expect(verify.result).toBe("PASS");
@@ -184,11 +186,16 @@ describe("agent-team tools end to end", () => {
     const reviewNoReview = JSON.parse((await executeGate(runtime, { gate: "REVIEW", claim: "r", expectedRevision: acceptNoReview.revision }, tool)).content);
     expect(reviewNoReview.result).toBe("FAIL");
     expect(reviewNoReview.missing).toContain("independent-review");
-    // complete a reviewer handoff: now ACCEPT reaches evidence/assumption checks
-    await executeHandoff(runtime, { action: "prepare", expectedRevision: reviewNoReview.revision, role: "reviewer", objective: "review delivery", context: [], allowedScope: ["src/a.ts"], prohibitedScope: [], questions: [], requiredEvidence: ["test output"], stopCondition: "findings listed", skills: ["agent-team-code-review"] }, tool);
+    // plant a completed implementation and reviewer: ACCEPT reaches the evidence/assumption checks
+    await appendEvent(storeContext(root, "sess-1", "team-leader"), "handoff.launched", { id: "HND-0001" }, (s) => ({
+      ...s,
+      handoffs: [
+        ...s.handoffs,
+        { id: "HND-0001", role: "coder" as const, objective: "implement", context: [], allowedScope: ["src/a.ts"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "done", skills: [], dependsOn: [], status: "completed" as const, sessionID: "ses_coder", parentSessionID: "sess-1" },
+        { id: "HND-0002", role: "reviewer" as const, objective: "review", context: [], allowedScope: ["src/a.ts"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "done", skills: [], dependsOn: [], status: "completed" as const, sessionID: "ses_reviewer", parentSessionID: "sess-1" },
+      ],
+    }));
     let rev = await readStateSafe(runtime);
-    await executeHandoff(runtime, { action: "complete", expectedRevision: rev, handoffId: "HND-0001", result: { status: "PASS", summary: "looks good", findings: [], risks: [], unknowns: [], recommended_next_action: "accept" } }, tool);
-    rev = await readStateSafe(runtime);
     const review = JSON.parse((await executeGate(runtime, { gate: "REVIEW", claim: "r", expectedRevision: rev }, tool)).content);
     expect(review.result).toBe("PASS");
     const accept = JSON.parse((await executeGate(runtime, { gate: "ACCEPT", claim: "done", expectedRevision: review.revision }, tool)).content);
@@ -212,12 +219,17 @@ describe("agent-team tools end to end", () => {
         risks: [], rollback: "revert", owner: "team-leader", status: "IN_PROGRESS",
       },
     }));
-    await executeEvidence(runtime, { expectedRevision: planted.revision, criterionId: "AC-1", kind: "test", status: "pass", summary: "green", command: "npm test", observedAt: "t" }, tool);
+    await recordObservedEvidence(root, { criterionId: "AC-1", kind: "test", summary: "green", command: "npm test", exitCode: 0, output: "ok" });
     let rev = await readStateSafe(runtime);
-    // ACCEPT requires the reviewer handoff even with green evidence
-    await executeHandoff(runtime, { action: "prepare", expectedRevision: rev, role: "reviewer", objective: "review delivery", context: [], allowedScope: ["src/a.ts"], prohibitedScope: [], questions: [], requiredEvidence: ["test output"], stopCondition: "done" }, tool);
-    rev = await readStateSafe(runtime);
-    await executeHandoff(runtime, { action: "complete", expectedRevision: rev, handoffId: "HND-0001", result: { status: "PASS", summary: "ok", findings: [], risks: [], unknowns: [], recommended_next_action: "accept" } }, tool);
+    // ACCEPT requires the independent review even with green evidence
+    await appendEvent(storeContext(root, "sess-1", "team-leader"), "handoff.launched", { id: "HND-0001" }, (s) => ({
+      ...s,
+      handoffs: [
+        ...s.handoffs,
+        { id: "HND-0001", role: "coder" as const, objective: "implement", context: [], allowedScope: ["src/a.ts"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "done", skills: [], dependsOn: [], status: "completed" as const, sessionID: "ses_coder", parentSessionID: "sess-1" },
+        { id: "HND-0002", role: "reviewer" as const, objective: "review", context: [], allowedScope: ["src/a.ts"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "done", skills: [], dependsOn: [], status: "completed" as const, sessionID: "ses_reviewer", parentSessionID: "sess-1" },
+      ],
+    }));
     rev = await readStateSafe(runtime);
     const accept = JSON.parse((await executeGate(runtime, { gate: "ACCEPT", claim: "done", expectedRevision: rev }, tool)).content);
     expect(accept.result).toBe("PASS");
@@ -242,88 +254,63 @@ describe("agent-team tools end to end", () => {
     expect(resolved.status).toBe("approved");
     await expect(executeApproval(runtime, { action: "resolve", expectedRevision: 2, approvalId: "APR-0001", decision: "approved", userMessageId: "msg-2" }, tool)).rejects.toThrow(/already approved/);
   });
-  it("handoff: prepare/complete/cancel with guards", async () => {
+  it("handoff: launch/cancel with guards", async () => {
     const { runtime } = await freshRuntime();
     await executeState(runtime, { action: "initialize", outcome: "O" }, tool);
     const specialist = { sessionID: "s", agent: "team-leader/coder" } as never;
-    await expect(executeHandoff(runtime, { action: "prepare", expectedRevision: 0, role: "explorer", objective: "o", context: [], allowedScope: ["src/**"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "s" }, specialist)).rejects.toThrow(/only team-leader/);
-    const base = { role: "explorer", objective: "map", context: ["c"], allowedScope: ["src/**"], prohibitedScope: [], questions: ["q?"], requiredEvidence: ["tree"], stopCondition: "done" } as const;
-    const p1 = JSON.parse((await executeHandoff(runtime, { action: "prepare", expectedRevision: 0, ...base }, tool)).content);
-    expect(p1.id).toBe("HND-0001");
-    expect(p1.prompt).toContain("HND-0001");
-    // gates see prepared handoffs without results as no findings (never crash)
-    const gateAfterPrepare = JSON.parse((await executeGate(runtime, { gate: "INTENT", claim: "g", expectedRevision: 1 }, tool)).content);
-    expect(gateAfterPrepare.result).toBe("PASS");
-    await executeHandoff(runtime, { action: "prepare", expectedRevision: 2, ...base }, tool);
-    await executeHandoff(runtime, { action: "prepare", expectedRevision: 3, ...base }, tool);
-    // four handoffs still fit inside the parallel budget of six
-    const p4 = JSON.parse((await executeHandoff(runtime, { action: "prepare", expectedRevision: 4, ...base }, tool)).content);
-    expect(p4.id).toBe("HND-0004");
-    const done = JSON.parse((await executeHandoff(runtime, { action: "complete", expectedRevision: 5, handoffId: "HND-0001", result: { status: "PASS", summary: "mapped", findings: [], risks: [], unknowns: [], recommended_next_action: "build" } }, tool)).content);
-    expect(done.revision).toBe(6);
-    await expect(executeHandoff(runtime, { action: "complete", expectedRevision: 6, handoffId: "HND-9999", result: { status: "PASS", summary: "s", findings: [], risks: [], unknowns: [], recommended_next_action: "x" } }, tool)).rejects.toThrow(/unknown handoff/);
-    const cancelled = JSON.parse((await executeHandoff(runtime, { action: "cancel", expectedRevision: 6, handoffId: "HND-0002", reason: "dup" }, tool)).content);
-    expect(cancelled.id).toBe("HND-0002");
-    await expect(executeHandoff(runtime, { action: "cancel", expectedRevision: 7, handoffId: "HND-9999", reason: "x" }, tool)).rejects.toThrow(/unknown handoff/);
+    const base = { role: "explorer" as const, objective: "map", context: ["c"], allowedScope: ["src/**"], prohibitedScope: [], questions: ["q?"], requiredEvidence: ["tree"], stopCondition: "done" };
+    await expect(executeHandoff(runtime, { action: "launch", expectedRevision: 0, units: [base] }, specialist)).rejects.toThrow(/only team-leader/);
+    const p1 = JSON.parse((await executeHandoff(runtime, { action: "launch", expectedRevision: 0, units: [base] }, tool)).content);
+    expect(p1.ids).toEqual(["HND-0001"]);
+    expect(p1.sessions[0].sessionID).toMatch(/^ses_/);
+    expect(p1.prompts[0]).toContain("HND-0001");
+    // a packet is not a handoff
+    await expect(executeHandoff(runtime, { action: "prepare", expectedRevision: 1, ...base } as never, tool)).rejects.toThrow(/prompt packet is not a handoff/);
+    const cancelled = JSON.parse((await executeHandoff(runtime, { action: "cancel", expectedRevision: 1, handoffId: "HND-0001", reason: "dup" }, tool)).content);
+    expect(cancelled.id).toBe("HND-0001");
+    await expect(executeHandoff(runtime, { action: "cancel", expectedRevision: 2, handoffId: "HND-9999", reason: "x" }, tool)).rejects.toThrow(/unknown handoff/);
   });
   it("handoff: carries the assigned skills and the dependency graph", async () => {
     const { runtime } = await freshRuntime();
     await executeState(runtime, { action: "initialize", outcome: "O" }, tool);
     const root = projectRootOfRuntime(runtime);
-    // wave 1: two independent units, no dependency between them
-    const w1 = JSON.parse((await executeHandoff(runtime, { action: "prepare", expectedRevision: 0, role: "explorer", objective: "map the domain", context: [], allowedScope: ["src/**"], prohibitedScope: [], questions: [], requiredEvidence: ["glossary"], stopCondition: "mapped", skills: ["agent-team-domain-discovery"] }, tool)).content);
-    expect(w1.packet.skills).toEqual(["agent-team-domain-discovery"]);
-    expect(w1.prompt).toContain("Load skills first: agent-team-domain-discovery");
-    const w2 = JSON.parse((await executeHandoff(runtime, { action: "prepare", expectedRevision: 1, role: "worker", objective: "draft the memo", context: [], allowedScope: ["docs/**"], prohibitedScope: [], questions: [], requiredEvidence: ["file"], stopCondition: "drafted", skills: ["agent-team-general-execution", "agent-team-writing-execution"] }, tool)).content);
-    expect(w2.packet.skills).toEqual(["agent-team-general-execution", "agent-team-writing-execution"]);
-    // wave 2 depends on wave 1
-    const w3 = JSON.parse((await executeHandoff(runtime, { action: "prepare", expectedRevision: 2, role: "reviewer", objective: "review both", context: [], allowedScope: ["src/**", "docs/**"], prohibitedScope: [], questions: [], requiredEvidence: ["findings"], stopCondition: "reviewed", skills: ["agent-team-code-review"], dependsOn: ["HND-0001", "HND-0002"] }, tool)).content);
-    expect(w3.packet.depends_on).toEqual(["HND-0001", "HND-0002"]);
-    expect(w3.prompt).toContain("Wait for these handoffs to complete");
-    // the projection separates ready from blocked
-    const { project } = await import("../../src/ledger/projection.js");
+    const w1 = JSON.parse((await executeHandoff(runtime, { action: "launch", expectedRevision: 0, units: [{ role: "explorer", objective: "map the domain", context: [], allowedScope: ["src/**"], prohibitedScope: [], questions: [], requiredEvidence: ["glossary"], stopCondition: "mapped", skills: ["agent-team-domain-discovery"] }] }, tool)).content);
+    expect(w1.prompts[0]).toContain("agent-team-domain-discovery");
+    const w2 = JSON.parse((await executeHandoff(runtime, { action: "launch", expectedRevision: 1, units: [{ role: "worker", objective: "draft the memo", context: [], allowedScope: ["docs/**"], prohibitedScope: [], questions: [], requiredEvidence: ["file"], stopCondition: "drafted", skills: ["agent-team-general-execution", "agent-team-writing-execution"] }] }, tool)).content);
+    expect(w2.ids).toEqual(["HND-0002"]);
+    const w3 = JSON.parse((await executeHandoff(runtime, { action: "launch", expectedRevision: 2, units: [{ role: "reviewer", objective: "review both", context: [], allowedScope: ["src/**", "docs/**"], prohibitedScope: [], questions: [], requiredEvidence: ["findings"], stopCondition: "reviewed", skills: ["agent-team-code-review"], dependsOn: ["HND-0001", "HND-0002"] }] }, tool)).content);
+    expect(w3.prompts[0]).toContain("Wait for these handoffs to complete");
     const { readState } = await import("../../src/ledger/store.js");
-    const blocked = project((await readState(root))!);
-    expect(blocked.handoffs_ready).toEqual(["HND-0001:explorer", "HND-0002:worker"]);
-    expect(blocked.handoffs_blocked).toEqual(["HND-0003:reviewer (needs HND-0001, HND-0002)"]);
-    // completing a dependency unblocks the next wave
-    await executeHandoff(runtime, { action: "complete", expectedRevision: 3, handoffId: "HND-0001", result: { status: "PASS", summary: "mapped", findings: [], risks: [], unknowns: [], recommended_next_action: "build" } }, tool);
-    await executeHandoff(runtime, { action: "complete", expectedRevision: 4, handoffId: "HND-0002", result: { status: "PASS", summary: "drafted", findings: [], risks: [], unknowns: [], recommended_next_action: "review" } }, tool);
-    const unblocked = project((await readState(root))!);
-    expect(unblocked.handoffs_ready).toEqual(["HND-0003:reviewer"]);
-    expect(unblocked.handoffs_blocked).toEqual([]);
+    const state = await readState(root);
+    expect(state?.handoffs[2]?.dependsOn).toEqual(["HND-0001", "HND-0002"]);
+    expect(state?.handoffs[0]?.skills).toEqual(["agent-team-domain-discovery"]);
   });
   it("handoff: refuses to exceed the parallel specialist budget", async () => {
-    const { runtime } = await freshRuntime();
+    const { runtime, root } = await freshRuntime();
     await executeState(runtime, { action: "initialize", outcome: "O" }, tool);
-    const base = { role: "explorer", objective: "map", context: [], allowedScope: ["src/**"], prohibitedScope: [], questions: [], requiredEvidence: ["tree"], stopCondition: "done" } as const;
-    // the budget is 6 in the test runtime
+    const base = { role: "explorer" as const, objective: "map", context: [], allowedScope: ["src/**"], prohibitedScope: [], questions: [], requiredEvidence: ["tree"], stopCondition: "done" };
     for (let i = 0; i < 6; i++) {
-      const res = JSON.parse((await executeHandoff(runtime, { action: "prepare", expectedRevision: i, ...base }, tool)).content);
-      expect(res.id).toBe(`HND-000${i + 1}`);
+      const res = JSON.parse((await executeHandoff(runtime, { action: "launch", expectedRevision: i, units: [{ ...base, objective: `unit ${i}` }] }, tool)).content);
+      expect(res.ids).toEqual([`HND-000${i + 1}`]);
     }
-    // the seventh would exceed the budget: the tool refuses instead of
-    // letting the host run out of memory
-    await expect(executeHandoff(runtime, { action: "prepare", expectedRevision: 6, ...base }, tool)).rejects.toThrow(/parallel specialist budget exhausted/);
-    // completing one frees a slot
-    await executeHandoff(runtime, { action: "complete", expectedRevision: 6, handoffId: "HND-0001", result: { status: "PASS", summary: "ok", findings: [], risks: [], unknowns: [], recommended_next_action: "next" } }, tool);
-    const again = JSON.parse((await executeHandoff(runtime, { action: "prepare", expectedRevision: 7, ...base }, tool)).content);
-    expect(again.id).toBe("HND-0007");
+    await expect(executeHandoff(runtime, { action: "launch", expectedRevision: 6, units: [base] }, tool)).rejects.toThrow(/parallel specialist budget exhausted/);
+    await executeHandoff(runtime, { action: "cancel", expectedRevision: 6, handoffId: "HND-0001", reason: "free a slot" }, tool);
+    const again = JSON.parse((await executeHandoff(runtime, { action: "launch", expectedRevision: 7, units: [base] }, tool)).content);
+    expect(again.ids).toEqual(["HND-0007"]);
+    void root;
   });
   it("handoff: defaults the skills to the role's own procedures", async () => {
     const { runtime } = await freshRuntime();
     await executeState(runtime, { action: "initialize", outcome: "O" }, tool);
-    const base = { role: "worker", objective: "write the brief", context: [], allowedScope: ["docs/**"], prohibitedScope: [], questions: [], requiredEvidence: ["file"], stopCondition: "written" } as const;
-    const p1 = JSON.parse((await executeHandoff(runtime, { action: "prepare", expectedRevision: 0, ...base }, tool)).content);
-    expect(p1.packet.skills).toEqual(["agent-team-general-execution", "agent-team-research-workflow", "agent-team-writing-execution", "agent-team-structured-investigation"]);
-    expect(p1.prompt).toContain("Load skills first: agent-team-general-execution");
-    // the leader may still override the default
-    const p2 = JSON.parse((await executeHandoff(runtime, { action: "prepare", expectedRevision: 1, ...base, skills: ["agent-team-writing-execution"] }, tool)).content);
-    expect(p2.packet.skills).toEqual(["agent-team-writing-execution"]);
-    // and the default is persisted, so the ledger shows what the specialist was told to load
+    const base = { role: "worker" as const, objective: "write the brief", context: [], allowedScope: ["docs/**"], prohibitedScope: [], questions: [], requiredEvidence: ["file"], stopCondition: "written" };
+    const p1 = JSON.parse((await executeHandoff(runtime, { action: "launch", expectedRevision: 0, units: [base] }, tool)).content);
+    expect(p1.prompts[0]).toContain("agent-team-general-execution");
+    const p2 = JSON.parse((await executeHandoff(runtime, { action: "launch", expectedRevision: 1, units: [{ ...base, objective: "write the second brief", allowedScope: ["notes/**"], skills: ["agent-team-writing-execution"] }] }, tool)).content);
+    expect(p2.ids).toEqual(["HND-0002"]);
     const { readState } = await import("../../src/ledger/store.js");
     const state = await readState(projectRootOfRuntime(runtime));
     expect(state?.handoffs[0]?.skills.length).toBeGreaterThan(0);
+    expect(state?.handoffs[1]?.skills).toEqual(["agent-team-writing-execution"]);
   });
   it("delivery: registers the active contract and unblocks the gates", async () => {
     const { runtime } = await freshRuntime();
@@ -379,10 +366,10 @@ describe("agent-team tools end to end", () => {
     const plan = JSON.parse((await executeGate(runtime, { gate: "PLAN", claim: "p", expectedRevision: rev }, tool)).content);
     expect(plan.result).toBe("PASS");
     // evidence for an undeclared criterion is refused
-    await expect(executeEvidence(runtime, { expectedRevision: plan.revision, criterionId: "AC-9", kind: "test", status: "pass", summary: "s", command: "npm test", observedAt: "t" }, tool)).rejects.toThrow(/unknown criterionId/);
-    // evidence for the declared criteria is accepted
-    await executeEvidence(runtime, { expectedRevision: plan.revision, criterionId: "AC-1", kind: "test", status: "pass", summary: "green", command: "npm test", observedAt: "t" }, tool);
-    await executeEvidence(runtime, { expectedRevision: plan.revision + 1, criterionId: "AC-2", kind: "source", status: "pass", summary: "reads it", artifactRef: "src/board.ts", observedAt: "t" }, tool);
+    await expect(executeEvidence(runtime, { expectedRevision: plan.revision, criterionId: "AC-9", kind: "test", status: "partial", summary: "s", command: "npm test", observedAt: "t" }, tool)).rejects.toThrow(/unknown criterionId/);
+    // observed checks for the declared criteria are accepted
+    await recordObservedEvidence(root, { criterionId: "AC-1", kind: "test", summary: "green", command: "npm test", exitCode: 0, output: "ok" });
+    await recordObservedEvidence(root, { criterionId: "AC-2", kind: "source", summary: "reads it", command: "grep -q x src/board.ts", exitCode: 0, output: "x" });
     let rev2 = await readStateSafe(runtime);
     // VERIFY passes with the criteria satisfied
     const verify = JSON.parse((await executeGate(runtime, { gate: "VERIFY", claim: "v", expectedRevision: rev2 }, tool)).content);
@@ -391,9 +378,15 @@ describe("agent-team tools end to end", () => {
     const reviewNoReview = JSON.parse((await executeGate(runtime, { gate: "REVIEW", claim: "r", expectedRevision: verify.revision }, tool)).content);
     expect(reviewNoReview.result).toBe("FAIL");
     expect(reviewNoReview.missing).toContain("independent-review");
-    await executeHandoff(runtime, { action: "prepare", expectedRevision: reviewNoReview.revision, role: "reviewer", objective: "review", context: [], allowedScope: ["src/board.ts"], prohibitedScope: [], questions: [], requiredEvidence: ["findings"], stopCondition: "reviewed" }, tool);
-    rev2 = await readStateSafe(runtime);
-    await executeHandoff(runtime, { action: "complete", expectedRevision: rev2, handoffId: "HND-0001", result: { status: "PASS", summary: "ok", findings: [], risks: [], unknowns: [], recommended_next_action: "accept" } }, tool);
+    const { storeContext, appendEvent } = await import("../../src/ledger/store.js");
+    await appendEvent(storeContext(root, "sess-1", "team-leader"), "handoff.launched", { id: "HND-0001" }, (s) => ({
+      ...s,
+      handoffs: [
+        ...s.handoffs,
+        { id: "HND-0001", role: "coder" as const, objective: "implement", context: [], allowedScope: ["src/board.ts"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "done", skills: [], dependsOn: [], status: "completed" as const, sessionID: "ses_coder", parentSessionID: "sess-1" },
+        { id: "HND-0002", role: "reviewer" as const, objective: "review", context: [], allowedScope: ["src/board.ts"], prohibitedScope: [], questions: [], requiredEvidence: [], stopCondition: "done", skills: [], dependsOn: [], status: "completed" as const, sessionID: "ses_reviewer", parentSessionID: "sess-1" },
+      ],
+    }));
     rev2 = await readStateSafe(runtime);
     const review = JSON.parse((await executeGate(runtime, { gate: "REVIEW", claim: "r", expectedRevision: rev2 }, tool)).content);
     expect(review.result).toBe("PASS");

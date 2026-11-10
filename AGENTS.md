@@ -28,7 +28,7 @@ npx vitest run test/unit test/integration          # the suites CI runs per SDK 
 npx vitest run test/unit/gates.test.ts             # one file
 npm run schemas:generate # after any Zod schema change
 npm run bench           # dry mode: validates case definitions only, never scores
-npm run compat:check    # builds + tests against SDK 2.0.10, 2.1.4, 2.2.0
+npm run compat:check    # builds + tests against SDK 2.2.0
 ```
 
 Order matters in one place only: a schema change without regenerating fails the drift test,
@@ -69,11 +69,11 @@ backup directory — `.agent-team/setup-backups/` in a project and
 user already has in plaintext; it is a backup, not a ledger document, and it is deliberately
 byte-for-byte.
 
-**Host APIs must compile on three SDK lines.** `npm run compat:check` builds and tests against
-`@opencode/plugin` 2.0.10, 2.1.4 and 2.2.0. Surfaces absent from the older typings (e.g.
-`ctx.experimental.generate`, 2.2.x only) must be read through an `unknown` view with feature
-detection, like `resolveTextGenerator` in `src/compat/host.ts`. Never assume a host surface
-exists at compile time.
+**Host APIs must compile on OpenCode 2.2.0.** `npm run compat:check` builds and tests against
+`@opencode/plugin` 2.2.0. Surfaces that may be absent on a later patch (for example
+`ctx.experimental.generate.decisions`, `ctx.session.instructions.entry`) must be read through
+an `unknown` view with feature detection, like `resolveSessionLauncher` in
+`src/compat/host.ts`. Never assume a host surface exists at compile time.
 
 **Never spawn the `opencode` CLI from a unit or integration test.** A real run creates a
 real session in the developer's own OpenCode store; a run against a model that does not
@@ -81,7 +81,7 @@ exist leaves a failed session behind (`Model unavailable: <provider>/<model>`) a
 as an error in the developer's own session list. The CLI belongs to `test/e2e/` and to the
 model bench, both opt-in. Extract the rule under test into a pure function instead.
 
-**`src/doctor/checks.ts` hardcodes the tool count** (`${n}/9 agent_team_* tools`), and
+**`src/doctor/checks.ts` hardcodes the tool count** (`${n}/10 agent_team_* tools`), and
 `test/integration/contracts.test.ts` hardcodes the tool names, the command count and the
 skill count. Adding or renaming any of them means updating both in the same commit. The
 same test pins the declared enums of the state, handoff, gate and evidence tools to the

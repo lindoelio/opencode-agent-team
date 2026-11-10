@@ -7,11 +7,8 @@ import { readConfigFile } from "../bootstrap/jsonc.js";
 import { resolveScope, type Scope } from "../bootstrap/scope.js";
 import { LEADER_REL, inspectLeaderFile, isValidLeaderTitle } from "../bootstrap/templates.js";
 import { runDoctor, renderDoctorReport } from "../doctor/checks.js";
-import { resolveDecisionGenerator } from "../compat/host.js";
-import { decisionReport, renderDecisionListing, thresholdsLine } from "../decision/catalog.js";
-import { decisionOptions, defaultAgentTeamOptions } from "../options.js";
+import { defaultAgentTeamOptions } from "../options.js";
 import { appendEvent, readState, storeContext } from "../ledger/store.js";
-import { project } from "../ledger/projection.js";
 import { projectRootOf, type AgentTeamRuntime } from "../runtime.js";
 
 const PLUGIN_PACKAGE = `@lindoelio/opencode-agent-team@${packageVersion()}`;
@@ -165,42 +162,52 @@ export async function registerCommands(runtime: AgentTeamRuntime): Promise<{ dis
             const root = projectRootOf(runtime.ctx);
             const state = await readState(root);
             if (!state) {
-              await sendSessionText(runtime, sessionID, "Verdict: no engagement yet.\n\nNext: run /agent-team/start <outcome>, then /agent-team/guard to tune authorization.");
+              await sendSessionText(runtime, sessionID, "Verdict: no engagement yet.\n\nTell the leader the outcome you want. Guardrails can be recorded once the engagement exists.");
               return;
             }
             const add = parsed.get("add");
             const remove = parsed.get("remove");
             const mode = parsed.get("mode");
             const clear = parsed.flags.has("clear");
+            const allowPromotion = parsed.flags.has("allow-promotion") ? true : parsed.flags.has("no-promotion") ? false : undefined;
             if (mode !== undefined && mode !== "yolo" && mode !== "guarded") {
               await sendSessionText(runtime, sessionID, `Invalid --mode '${mode}': expected yolo or guarded. Nothing changed.`);
               return;
             }
-            const hasChanges = add !== undefined || remove !== undefined || mode !== undefined || clear;
-            const optAutonomy = runtime.options.autonomy ?? { mode: "yolo" as const, askBefore: [] as string[] };
+            const hasChanges = add !== undefined || remove !== undefined || mode !== undefined || clear || allowPromotion !== undefined;
+            const optAutonomy = runtime.options.autonomy ?? { mode: "yolo" as const, askBefore: [] as string[], allowPromotion: false };
             if (!hasChanges) {
               const effective = state.autonomyMode ?? optAutonomy.mode;
               const all = [...optAutonomy.askBefore, ...state.guardrails];
+              const promotion = state.allowPromotion === true || optAutonomy.allowPromotion === true;
               await sendSessionText(runtime, sessionID, [
                 `Autonomy: ${effective}${effective === "yolo" ? " (asks nothing by default)" : " (legacy ask-before-external behavior)"}`,
                 `Guardrails: ${all.length > 0 ? all.map((g) => `"${g}"`).join(", ") : "(none)"}`,
+                `Promotion: ${promotion ? "authorized" : "denied until --allow-promotion is recorded"}`,
                 "",
-                `Usage: /agent-team/guard --add "<pattern>" | --remove "<pattern>" | --clear | --mode yolo|guarded`,
+                `Usage: /agent-team/guard --add "<pattern>" | --remove "<pattern>" | --clear | --mode yolo|guarded | --allow-promotion | --no-promotion`,
                 `Patterns match "<action> <resources>" case-insensitively (plain text or regex).`,
               ].join("\n"));
               return;
             }
-            const next = await appendEvent(storeContext(root, sessionID, "plugin"), "guardrails.updated", { add, remove, mode, clear }, (s) => {
+            const next = await appendEvent(storeContext(root, sessionID, "plugin"), "guardrails.updated", { add, remove, mode, clear, allowPromotion }, (s) => {
               let guardrails = [...s.guardrails];
               if (clear) guardrails = [];
               if (remove !== undefined) guardrails = guardrails.filter((g) => g !== remove);
               if (add !== undefined && !guardrails.includes(add)) guardrails = [...guardrails, add];
-              return { ...s, guardrails, ...(mode ? { autonomyMode: mode } : {}) };
+              return {
+                ...s,
+                guardrails,
+                ...(mode ? { autonomyMode: mode } : {}),
+                ...(allowPromotion !== undefined ? { allowPromotion } : {}),
+              };
             });
             const effective = next.autonomyMode ?? optAutonomy.mode;
+            const promotion = next.allowPromotion === true || optAutonomy.allowPromotion === true;
             await sendSessionText(runtime, sessionID, [
               `Autonomy: ${effective}`,
               `Guardrails: ${next.guardrails.length > 0 ? next.guardrails.map((g) => `"${g}"`).join(", ") : "(none)"}`,
+              `Promotion: ${promotion ? "authorized" : "denied"}`,
               effective === "yolo" && next.guardrails.length === 0 ? "Agent Team asks nothing and executes autonomously." : "Matching actions now require explicit authorization.",
             ].join("\n"));
             return;
@@ -210,35 +217,10 @@ export async function registerCommands(runtime: AgentTeamRuntime): Promise<{ dis
             await sendSessionText(runtime, sessionID, renderDoctorReport(report));
             return;
           }
-          if (cmd.name === "agent-team/decisions") {
-            const root = projectRootOf(runtime.ctx);
-            const options = decisionOptions(runtime.options);
-            const surface = resolveDecisionGenerator(runtime.ctx);
-            const state = await readState(root);
-            const judgementRows = state?.evidence.filter((e) => e.kind === "judgment").length ?? 0;
-            const report = await decisionReport(runtime.ctx, root, surface.available, judgementRows);
-            await sendSessionText(runtime, sessionID, renderDecisionListing(report, thresholdsLine("team-leader", options)));
-            return;
-          }
-          if (cmd.name === "agent-team/status") {
-            const state = await readState(projectRootOf(runtime.ctx));
-            if (!state) {
-              await sendSessionText(runtime, sessionID, "Verdict: no engagement yet.\n\nNext: run /agent-team/start <outcome>.");
-              return;
-            }
-            const p = project(state);
-            const autonomy = state.autonomyMode ?? runtime.options.autonomy?.mode ?? "yolo";
-            const guards = [...(runtime.options.autonomy?.askBefore ?? []), ...state.guardrails];
-            await sendSessionText(runtime, sessionID, `Verdict: ${state.engagement.phase} / ${state.engagement.status} — ${p.next_action}\n\nPhase: ${p.phase}\nGate: ${JSON.stringify(p.gate_status)}\nEvidence: ${state.evidence.length} records\nRisks: ${p.critical_risks.length} critical/high\nAutonomy: ${autonomy} (${guards.length} guardrails)`);
-            return;
-          }
-          if (cmd.name === "agent-team/export") {
-            await sendSessionText(runtime, sessionID, "Agent Team export: choose bundle (status | decision-log | evidence | delivery-readiness | retrospective). Files/fields preview + redaction applied before writing to .agent-team/exports/. Re-run with the bundle name as argument to generate.");
-            return;
-          }
-          // Loop commands: structured prompt to agent-team in the current session.
-          const body = cmd.prompt(stripCommandPrefix(args, cmd.name));
-          await runtime.ctx.session.prompt({ sessionID, text: body } as never);
+          // Every registered command executes locally. A command that only
+          // re-entered the session with a prompt was part of the phase menu
+          // this change removed.
+          await sendSessionText(runtime, sessionID, `Unknown Agent Team command: ${cmd.name}`);
         },
       });
     }

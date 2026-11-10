@@ -16,6 +16,14 @@ describe("state machine", () => {
     expect(canTransitionPhase("VERIFY", "EXECUTE")).toBe(true);
     expect(canTransitionPhase("REVIEW", "VERIFY")).toBe(true);
   });
+  it("applies the class path", () => {
+    expect(canTransitionPhase("INTENT", "PLAN", "fix")).toBe(true);
+    expect(canTransitionPhase("INTENT", "DISCOVER", "fix")).toBe(false);
+    expect(canTransitionPhase("DISCOVER", "PLAN", "change")).toBe(true);
+    expect(canTransitionPhase("DISCOVER", "FRAME", "change")).toBe(false);
+    expect(canTransitionPhase("DISCOVER", "FRAME", "decision")).toBe(true);
+    expect(canTransitionPhase("INTENT", "PLAN", "change")).toBe(false);
+  });
   it("handles work status terminal + reopen", () => {
     expect(canTransitionStatus("IN_PROGRESS", "FAILED")).toBe(true);
     expect(canTransitionStatus("VERIFYING", "BLOCKED")).toBe(true);

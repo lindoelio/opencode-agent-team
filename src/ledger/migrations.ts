@@ -1,6 +1,7 @@
 import { AgentTeamProjectStateSchema, type AgentTeamProjectStateV2 } from "../domain/schemas.js";
 
-export const CURRENT_SCHEMA_VERSION = 2;
+
+export const CURRENT_SCHEMA_VERSION = 3;
 
 export function needsMigration(schemaVersion: number): boolean {
   return schemaVersion !== CURRENT_SCHEMA_VERSION;
@@ -71,12 +72,44 @@ function migrateDelivery(raw: unknown): unknown {
 export function migrateUnknown(state: unknown): unknown {
   const s = state as { schemaVersion?: number };
   if (!s || typeof s !== "object") throw new Error("unknown state layout");
-  if (s.schemaVersion === 2) return state;
-  if (s.schemaVersion === 1) return migrateV1toV2(state);
+  if (s.schemaVersion === 3) return state;
+  if (s.schemaVersion === 2) return migrateV2toV3(state);
+  if (s.schemaVersion === 1) return migrateV2toV3(migrateV1toV2(state));
   throw new Error(`unsupported state schema: ${String(s.schemaVersion)} (backup required before upgrade)`);
 }
 
-export function migrateV1toV2(state: unknown): AgentTeamProjectStateV2 {
+/**
+ * Forward-only migration. v2 → v3 adds the engagement class and the
+ * observation flag. It does not promote a prior `pass`: an unobserved row
+ * stays unobserved, and the gate refuses it.
+ */
+export function migrateV2toV3(state: unknown): AgentTeamProjectStateV2 {
+  const s = asRecord(state);
+  const evidence = Array.isArray(s["evidence"])
+    ? s["evidence"].map((raw) => {
+        const e = asRecord(raw);
+        return { ...e, observed: e["observed"] === true };
+      })
+    : [];
+  const handoffs = Array.isArray(s["handoffs"])
+    ? s["handoffs"].map((raw) => {
+        const h = asRecord(raw);
+        return { ...h, ...(typeof h["sessionID"] === "string" ? { sessionID: h["sessionID"] } : {}) };
+      })
+    : [];
+  const migrated: Record<string, unknown> = {
+    ...s,
+    schemaVersion: 3,
+    engagementClass: s["engagementClass"] === "fix" || s["engagementClass"] === "decision" ? s["engagementClass"] : "change",
+    evidence,
+    handoffs,
+  };
+  return AgentTeamProjectStateSchema.parse(migrated);
+}
+
+export type MigratedV2State = Omit<AgentTeamProjectStateV2, "schemaVersion"> & { schemaVersion: 2 };
+
+export function migrateV1toV2(state: unknown): MigratedV2State {
   const s = asRecord(state);
   const engagement = asRecord(s["engagement"]);
   const phase = PHASE_V1_TO_V2[String(engagement["phase"])] ?? String(engagement["phase"]);
@@ -101,6 +134,7 @@ export function migrateV1toV2(state: unknown): AgentTeamProjectStateV2 {
   const migrated: Record<string, unknown> = {
     ...s,
     schemaVersion: 2,
+    engagementClass: "change",
     engagement: { ...engagement, phase, status },
     gates,
     handoffs,
@@ -121,5 +155,6 @@ export function migrateV1toV2(state: unknown): AgentTeamProjectStateV2 {
   if (activeSlice !== undefined) migrated["activeDelivery"] = migrateDelivery(activeSlice);
   delete migrated["activeSlice"];
   delete migrated["modelProfile"];
-  return AgentTeamProjectStateSchema.parse(migrated);
+  // This is an intermediate shape. `migrateV2toV3` validates the final one.
+  return migrated as unknown as MigratedV2State;
 }

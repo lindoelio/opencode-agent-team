@@ -63,11 +63,11 @@ describe("VS-001 deterministic delivery loop", () => {
     const s3 = await appendEvent(ctx, "evidence.submitted", { id: "EVD-0001" }, (s) => ({
       ...s,
       engagement: { ...s.engagement, phase: "VERIFY" as const, status: "VERIFYING" as const },
-      evidence: [...s.evidence, { id: "EVD-0001", criterionId: "AC-001", kind: "test" as const, status: "pass" as const, summary: "board flow test passes", command: "npm test", digest: "abc123", observedAt: new Date().toISOString(), limitations: [] }],
+      evidence: [...s.evidence, { id: "EVD-0001", criterionId: "AC-001", kind: "test" as const, status: "pass" as const, summary: "board flow test passes", command: "npm test", digest: "abc123", observedAt: new Date().toISOString(), observed: true, limitations: [] }],
     }));
     const s4 = await appendEvent(ctx, "evidence.submitted", { id: "EVD-0002" }, (s) => ({
       ...s,
-      evidence: [...s.evidence, { id: "EVD-0002", criterionId: "AC-002", kind: "test" as const, status: "pass" as const, summary: "archived filter returns only archived", command: "npm test", digest: "def456", observedAt: new Date().toISOString(), limitations: [] }],
+      evidence: [...s.evidence, { id: "EVD-0002", criterionId: "AC-002", kind: "test" as const, status: "pass" as const, summary: "archived filter returns only archived", command: "npm test", digest: "def456", observedAt: new Date().toISOString(), observed: true, limitations: [] }],
     }));
 
     // REVIEW (independent reviewer, no critical findings) + ACCEPT

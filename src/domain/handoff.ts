@@ -55,10 +55,10 @@ export function renderPacketPrompt(p: HandoffPacket): string {
     `Prohibited scope: ${p.scope.prohibited.join(", ") || "(none)"}`,
     `Questions to answer: ${p.questions_to_answer.join(" | ") || "(none)"}`,
     `Required evidence: ${p.required_evidence.join(" | ") || "(none)"}`,
-    `Load skills first: ${p.skills.join(", ") || "(none specified — pick the ones inside your specialty)"}`,
+    `Role procedure: ${p.skills.join(", ") || "(none specified — follow the injected role procedure)"}`,
     ...(p.depends_on.length > 0 ? [`Wait for these handoffs to complete before starting: ${p.depends_on.join(", ")}`] : []),
     `Stop when: ${p.stop_condition}`,
-    `Return SpecialistResult@1 JSON: status PASS|FAIL|BLOCKED|ADVISORY, summary, findings[{severity,claim,evidence}], risks, unknowns, recommended_next_action.`,
+    `Call agent_team_report with SpecialistResult@1 JSON: status PASS|FAIL|BLOCKED|ADVISORY, summary, findings[{severity,claim,evidence}], risks, unknowns, recommended_next_action. Do not return it as prose for the leader to copy.`,
     `Act autonomously; do not ask for authorization unless a registered guardrail covers the action.`,
     `You may launch built-in OpenCode helper agents (e.g. explore, general); never create team-leader/* agents. Do not claim completion without evidence.`,
   ].join("\n");

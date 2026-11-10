@@ -3,6 +3,8 @@ import { validatePhaseTransition, canTransitionStatus, statusForPhase } from "..
 import { initializeState, readState, appendEvent } from "../ledger/store.js";
 import { projectRootOf, toolOk, type AgentTeamRuntime } from "../runtime.js";
 import { assertLedgerOwner } from "./authority.js";
+import { assertSupportedHost } from "../orchestrator/host-gate.js";
+import { takePendingRoute } from "../decision/route.js";
 import { openLedger } from "./ledger.js";
 import type { ToolContext } from "@opencode/plugin/promise/tool";
 
@@ -59,15 +61,19 @@ export async function executeState(runtime: AgentTeamRuntime, rawInput: unknown,
 
   if (input.action === "read") {
     const state = await readState(projectRoot);
-    if (!state) return toolOk({ initialized: false, hint: "run agent_team_state initialize via /agent-team/start" });
+    if (!state) return toolOk({ initialized: false, hint: "tell the leader the outcome you want" });
     return toolOk({ initialized: true, state });
   }
   if (input.action === "initialize") {
+    assertSupportedHost(runtime);
     assertLedgerOwner(tool, "initialize the engagement");
+    const pending = takePendingRoute(sessionId);
     const state = await initializeState({
       projectRoot,
       sessionId,
       actor: agent,
+      engagementClass: pending?.engagementClass === "fix" || pending?.engagementClass === "decision" ? pending.engagementClass : undefined,
+      route: pending,
       outcome: input.outcome,
       ...(input.actors ? { actors: input.actors } : {}),
       ...(input.constraints ? { constraints: input.constraints } : {}),
@@ -89,7 +95,11 @@ export async function executeState(runtime: AgentTeamRuntime, rawInput: unknown,
       if (input.clear === true) guardrails = [];
       if (input.remove && input.remove.length > 0) guardrails = guardrails.filter((g) => !input.remove!.includes(g));
       if (input.add && input.add.length > 0) guardrails = [...new Set([...guardrails, ...input.add])];
-      return { ...s, guardrails, ...(input.mode ? { autonomyMode: input.mode } : {}) };
+      return {
+        ...s,
+        guardrails,
+        ...(input.mode ? { autonomyMode: input.mode } : {}),
+      };
     });
     return toolOk({
       guardrails: next.guardrails,
@@ -102,7 +112,7 @@ export async function executeState(runtime: AgentTeamRuntime, rawInput: unknown,
   }
 
   // transition
-  validatePhaseTransition(current.engagement.phase, input.to);
+  validatePhaseTransition(current.engagement.phase, input.to, current.engagementClass ?? "change");
   // The status normally follows the phase, but it is still a transition and
   // must be legal: a terminal status is reopened only back to IN_PROGRESS,
   // and a delivered engagement is never silently reopened.
