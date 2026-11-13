@@ -28,7 +28,7 @@ npx vitest run test/unit test/integration          # the suites CI runs per SDK 
 npx vitest run test/unit/gates.test.ts             # one file
 npm run schemas:generate # after any Zod schema change
 npm run bench           # dry mode: validates case definitions only, never scores
-npm run compat:check    # builds + tests against SDK 2.2.0
+npm run compat:check    # builds + tests against SDK 2.2.0 and 2.3.0
 ```
 
 Order matters in one place only: a schema change without regenerating fails the drift test,
@@ -70,7 +70,7 @@ user already has in plaintext; it is a backup, not a ledger document, and it is 
 byte-for-byte.
 
 **Host APIs must compile on OpenCode 2.2.0.** `npm run compat:check` builds and tests against
-`@opencode/plugin` 2.2.0. Surfaces that may be absent on a later patch (for example
+`@opencode/plugin` 2.2.0 and 2.3.0. Surfaces that may be absent on a later patch (for example
 `ctx.experimental.generate.decisions`, `ctx.session.instructions.entry`) must be read through
 an `unknown` view with feature detection, like `resolveSessionLauncher` in
 `src/compat/host.ts`. Never assume a host surface exists at compile time.

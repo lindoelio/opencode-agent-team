@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`sessions:archive --blank`.** Sessions with no agent, no title, no parent,
+  no metadata and no tokens are state the host or client left behind, never
+  work. The sweep now recognizes them as their own class; the flag is opt-in so
+  a deliberate empty scratch session is never archived by surprise.
+
+### Changed
+
+- **The compatibility matrix covers OpenCode 2.3.0.** The plugin builds and
+  passes its suite against `@opencode/plugin` 2.2.0 and 2.3.0, and CI runs both.
+
+### Fixed
+
+- **Blank sessions are swept.** The maintenance command only knew plugin
+  children and temp leftovers; host-created blank sessions stayed in the thread
+  list forever. They are now a recognized class.
+
+### Known limitation
+
+- **OpenCode 2.3.0 still ignores `archived` from the plugin runtime.** Measured
+  on a real handoff: `session.update({ archived: true })` resolves and leaves
+  `time.archived` null, and the report event records `archive: "failed"` with
+  the reason. The host's HTTP API applies the same change, so the maintenance
+  command remains the working path until the runtime honors it.
+
 ## [0.8.0] - 2026-11-12
 
 ### Added

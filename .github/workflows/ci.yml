@@ -38,8 +38,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The three OpenCode host lines the plugin supports.
-        sdk: ["2.2.0"]
+        # The OpenCode host lines the plugin supports.
+        sdk: ["2.2.0", "2.3.0"]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

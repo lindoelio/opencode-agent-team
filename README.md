@@ -560,7 +560,7 @@ Stated plainly, because a README that lists only strengths is not useful.
 | The ledger | Real filesystems: hash chain, tamper detection, atomic writes, redaction, the lock timeout, concurrent appends |
 | Path containment | Real symlink and traversal tests |
 | Handoff scope enforcement | A tool call is refused when it leaves the handoff's scope — directly or through a built-in helper agent descended from the session |
-| The host compatibility matrix | `npm run compat:check` and a CI build and test the plugin against `@opencode/plugin` 2.2.0 |
+| The host compatibility matrix | `npm run compat:check` and a CI build and test the plugin against `@opencode/plugin` 2.2.0 and 2.3.0 |
 | The bench case definitions | Dry mode validates every case and fails on an unknown invariant name |
 | The published JSON Schemas | A test regenerates them from the Zod source and fails on drift |
 | Coverage | Enforced thresholds: 98% statements, 98% lines, 98% functions, 87% branches. Below that, `npm run verify` fails. |
@@ -600,7 +600,7 @@ source, so a schema can never quietly stop describing the ledger.
 npm ci
 npm run verify          # typecheck → test:coverage → bench → pack:check. The gate.
 npm run schemas:generate # after any Zod schema change
-npm run compat:check    # builds and tests against SDK 2.2.0
+npm run compat:check    # builds and tests against SDK 2.2.0 and 2.3.0
 ```
 
 `npm run verify` is the whole definition of done. It is the same gate CI runs.
@@ -629,6 +629,9 @@ settled child session stays in the thread list; the ledger event records
 sessions and `npm run sessions:archive -- --apply` archives them through the
 host's HTTP API. It only touches sessions the plugin booked
 (`metadata.agentTeamParent`), never the leader's own conversation.
+`--blank` also sweeps sessions with no agent, no title, no parent, no metadata
+and no tokens: state the host or client left behind, never work. `--temp`
+covers sessions left in OS temp directories.
 
 ```bash
 AGENT_TEAM_BENCH_MODELS="provider/a,provider/b" npm run bench:model

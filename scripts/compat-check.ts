@@ -22,7 +22,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ALL_SDKS = ["2.2.0"];
+const ALL_SDKS = ["2.2.0", "2.3.0"];
 const requested = process.argv[2];
 const SUPPORTED_SDKS = requested ? [requested] : ALL_SDKS;
 
@@ -63,7 +63,7 @@ for (const sdk of SUPPORTED_SDKS) {
     for (const entry of ["package.json", "package-lock.json", "tsconfig.json", "vitest.config.ts"]) {
       fs.copyFileSync(path.join(repoRoot, entry), path.join(scratch, entry));
     }
-    for (const dir of ["src", "test", "fixtures", "assets", "bench", "schemas"]) {
+    for (const dir of ["src", "test", "fixtures", "assets", "bench", "schemas", "scripts"]) {
       fs.cpSync(path.join(repoRoot, dir), path.join(scratch, dir), { recursive: true });
     }
     // The resolved tree comes from the repository; only the SDK itself is

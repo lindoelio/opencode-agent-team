@@ -397,8 +397,8 @@ worker, reviewer, security and release specialists.
 ## Host compatibility
 
 The plugin requires OpenCode 2.2.0 or newer and is verified against
-`@opencode/plugin` 2.2.0. The host floor and the required team surfaces are
-handled in `src/compat/host.ts`:
+`@opencode/plugin` 2.2.0 and 2.3.0. The host floor and the required team
+surfaces are handled in `src/compat/host.ts`:
 
 - The generation API is `ctx.experimental.generate.text` on 2.2.x. The plugin
   **resolves the surface by feature detection, not by version number**, so it
