@@ -52,6 +52,15 @@ surface leaves the criterion missing rather than inventing one, and the
 preflight reports `DEGRADED` so the operator can see that observed checks cannot
 run.
 
+Evidence is read as a time series. For each criterion and command, the gate and
+the projection read the latest observation: a failed run is superseded by a
+later observed pass of the same check, so a delivery that was fixed can
+recover. A typed row never supersedes an observed one — a model cannot
+un-prove a check the plugin recorded. A criterion that is still failing is
+relaxed only by a recorded waiver, which carries a reason and stays visible in
+the gate result's `waivers` list; it never appears in `satisfied` and it never
+fabricates evidence.
+
 ## Baseline controls
 
 These are the guarantees the plugin enforces in code, and each one has a test.
@@ -127,11 +136,28 @@ agent that untrusted content was seen so it treats that content as data, and the
 tool-audit hook **refuses a tool call whose input carries a quarantined
 instruction**. Detection alone was not containment; the refusal is.
 
+The detection covers the English, Portuguese and Spanish instruction families,
+because a screen that only reads English protects only English input. A
+prompt the plugin itself wrote for a launched specialist is exempt: it is the
+task, not retrieved text, and quarantining it would tell the specialist to
+treat its own brief as data. The decision screen keeps its own, deliberately
+separate list, evolved with the same families.
+
 ### Scope is enforced
 
 A specialist's write outside its handoff's `allowedScope`, or inside its
 `prohibitedScope`, is refused by the tool audit hook. The scope is echoed into the
 packet the specialist receives, so the rule and the contract agree.
+
+The boundary follows session lineage. A specialist may launch a built-in helper
+agent, and the helper runs under its own agent name; the tool audit walks the
+parent chain and holds the helper to the same writable scope and the same check
+allowlist. The host's `session.created` events are the cheap path; when they do
+not report the relation, the plugin asks the host's session record once and
+caches the answer (positive and definitive negative), so a host that never
+emits the event still gets the boundary enforced. Only a host that exposes no
+parent relation at all degrades to direct-session enforcement, and the plugin
+does not pretend otherwise.
 
 ### The plugin makes no network calls
 

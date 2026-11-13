@@ -80,6 +80,27 @@ describe("host compatibility", () => {
     expect(resolveSessionLauncher({}).available).toBe(false);
   });
 
+  it("exposes the archive surface only when the host can archive", async () => {
+    const create = async () => ({ id: "ses_child" });
+    const prompt = async () => ({});
+    const plain = resolveSessionLauncher({ session: { create, prompt } });
+    expect(plain.launcher?.archive).toBeUndefined();
+
+    const calls: unknown[] = [];
+    const updating = resolveSessionLauncher({
+      session: {
+        create,
+        prompt,
+        update: async (input: unknown) => {
+          calls.push(input);
+        },
+      },
+    });
+    expect(updating.launcher?.archive).toBeDefined();
+    await updating.launcher!.archive!("ses_child");
+    expect(calls).toEqual([{ sessionID: "ses_child", archived: true }]);
+  });
+
   it("resolves a shell surface only when the host exposes one", () => {
     expect(resolveShellSurface({ session: { shell: async () => ({}) } }).available).toBe(true);
     expect(resolveShellSurface({ shell: { run: async () => ({}) } }).available).toBe(true);

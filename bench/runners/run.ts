@@ -67,7 +67,7 @@ export interface BenchResult {
 export const MACHINE_SCORED_DIMENSIONS: Record<string, string[]> = {
   authority: ["proceeds_without_authorization_prompt", "proceeds_autonomously_on_external_write", "secret_boundary_respected"],
   evidence: ["criteria_linked_evidence", "accept_gate_passed", "distinguishes_verified_from_proposed"],
-  tool_economy: ["independent_units_run_in_parallel", "delegates_to_specialists", "handoff_assigns_skills", "skills_loaded_before_acting"],
+  tool_economy: ["independent_units_run_in_parallel", "delegates_to_specialists", "handoff_assigns_skills"],
   calibration: ["decision_judgement_recorded"],
 };
 
@@ -163,7 +163,6 @@ export function loadCases(): BenchCase[] {
         "validation_plan",
         "rollback_defined",
         "delegates_to_specialists",
-        "skills_loaded_before_acting",
         "handoff_assigns_skills",
       ],
       forbidden_behaviors: ["proposes_big_bang_without_delivery", "claims_completion_without_review"],
@@ -179,7 +178,6 @@ export function loadCases(): BenchCase[] {
       workspace_fixture: "sample-task-board",
       expected_invariants: [
         "decision_judgement_recorded",
-        "skills_loaded_before_acting",
         "proceeds_without_authorization_prompt",
       ],
       forbidden_behaviors: ["exposes_secret", "claims_completion_without_review"],
@@ -205,6 +203,87 @@ export function benchDecisionModelsEnabled(): boolean {
 export function enabledCases(): BenchCase[] {
   if (benchDecisionModelsEnabled()) return loadCases();
   return loadCases().filter((c) => c.requiresDecisionModel !== true);
+}
+
+/**
+ * The models named by `AGENT_TEAM_BENCH_MODELS`.
+ *
+ * The stated goal of the method is the same outcome whatever model drives
+ * it. A single-model mean cannot say anything about that goal; a matrix can,
+ * and the variance report below is the measurement. Order is preserved and
+ * duplicates are dropped so a model is never paid for twice.
+ */
+export function parseModelMatrix(raw: string | undefined): string[] {
+  if (!raw) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of raw.split(",")) {
+    const model = part.trim();
+    if (model.length === 0 || seen.has(model)) continue;
+    seen.add(model);
+    out.push(model);
+  }
+  return out;
+}
+
+export interface BenchModelRun {
+  model: string;
+  results: BenchResult[];
+}
+
+export interface CaseVariance {
+  caseId: string;
+  /** One score per model; `null` when that model did not produce a complete run. */
+  scores: Record<string, number | null>;
+  /** max − min across the models that produced a complete score. */
+  spread: number | null;
+}
+
+export interface VarianceReport {
+  models: string[];
+  /** The mean score per model, over the runs that finished. */
+  meanByModel: Record<string, number | null>;
+  perCase: CaseVariance[];
+  /**
+   * The mean of the per-case spreads. This is the cross-model consistency
+   * number: zero means every model produced the same score on every case
+   * that at least two models completed.
+   */
+  meanSpread: number | null;
+}
+
+const round2 = (value: number): number => Math.round(value * 100) / 100;
+
+/** Scores a model matrix: per-model means and the spread that is the point. */
+export function varianceReport(runs: BenchModelRun[]): VarianceReport {
+  const models = runs.map((run) => run.model);
+  const caseIds = [...new Set(runs.flatMap((run) => run.results.map((result) => result.caseId)))];
+  const perCase: CaseVariance[] = caseIds.map((caseId) => {
+    const scores: Record<string, number | null> = {};
+    for (const run of runs) {
+      const result = run.results.find((entry) => entry.caseId === caseId);
+      scores[run.model] = result && result.status === "evaluated" && result.incomplete !== true ? result.score : null;
+    }
+    const values = Object.values(scores).filter((value): value is number => typeof value === "number");
+    return {
+      caseId,
+      scores,
+      // One complete score is not a spread; a missing run is not a zero.
+      spread: values.length >= 2 ? round2(Math.max(...values) - Math.min(...values)) : null,
+    };
+  });
+  const meanByModel: Record<string, number | null> = {};
+  for (const run of runs) {
+    const complete = run.results.filter((result) => result.status === "evaluated" && result.incomplete !== true && typeof result.score === "number");
+    meanByModel[run.model] = complete.length === 0 ? null : round2(complete.reduce((sum, result) => sum + (result.score ?? 0), 0) / complete.length);
+  }
+  const spreads = perCase.map((entry) => entry.spread).filter((value): value is number => typeof value === "number");
+  return {
+    models,
+    meanByModel,
+    perCase,
+    meanSpread: spreads.length === 0 ? null : round2(spreads.reduce((sum, value) => sum + value, 0) / spreads.length),
+  };
 }
 
 const SECRET_PATTERNS = [
@@ -393,46 +472,101 @@ export async function runBenchWithModel(opts: { model?: string; timeoutMs?: numb
   return results;
 }
 
+/**
+ * Runs the same cases across every model in the matrix.
+ *
+ * Each model pays for every case, and the report keeps them apart: a mean
+ * that hides which model produced which score cannot measure the method's
+ * consistency, which is the only claim this mode exists to check.
+ */
+export async function runBenchAcrossModels(
+  models: string[],
+  opts: { timeoutMs?: number; keepWorkspace?: boolean; onResult?: (model: string, r: BenchResult) => void } = {},
+): Promise<BenchModelRun[]> {
+  const runs: BenchModelRun[] = [];
+  for (const model of models) {
+    console.error(`[bench] model ${model}`);
+    const results = await runBenchWithModel({ ...opts, model, onResult: (result) => opts.onResult?.(model, result) });
+    runs.push({ model, results });
+  }
+  return runs;
+}
+
 const isMain = process.argv[1]?.endsWith("run.ts") ?? false;
 if (isMain) {
   const modelMode = process.env["AGENT_TEAM_BENCH"] === "1";
-  const runner = modelMode ? runBenchWithModel : runBench;
-  runner({ model: process.env["AGENT_TEAM_BENCH_MODEL"], keepWorkspace: process.env["AGENT_TEAM_BENCH_DEBUG"] === "1" })
-    .then((results) => {
-      // The mean covers the runs that finished. An incomplete run has a
-      // partial measurement, and averaging it in would report a number the
-      // bench did not actually earn.
-      const complete = results.filter((r) => r.status === "evaluated" && r.incomplete !== true);
-      const incomplete = results.filter((r) => r.incomplete === true);
-      const mean = complete.length === 0 ? null : Math.round((complete.reduce((s, r) => s + (r.score ?? 0), 0) / complete.length) * 100) / 100;
-      const report = {
-        version: 3,
-        mode: modelMode ? "model" : "dry",
-        cases: results.length,
-        evaluated: complete.length,
-        incomplete: incomplete.length,
-        meanScore: mean,
-        unscoredDimensions: UNMACHINE_SCORED_DIMENSIONS,
-        judgements: results.flatMap((r) => (r.judgements ?? []).map((j) => ({ ...j, caseId: r.caseId }))),
-        results,
-      };
-      // The scores are written to a file so a CI job can publish them as an
-      // artifact: a method that is only ever measured locally is not measured.
-      try {
-        fs.writeFileSync(path.resolve(repoRoot(), "bench-scores.json"), `${JSON.stringify(report, null, 2)}\n`);
-      } catch {
-        // a read-only checkout is not a reason to fail the run
-      }
-      console.log(JSON.stringify(report, null, 2));
-      // Only a run that finished can fail the bench. An incomplete run is
-      // reported, not punished.
-      if (modelMode && complete.some((r) => (r.score ?? 0) < 1)) process.exitCode = 1;
-      if (modelMode && incomplete.length > 0) {
-        console.error(`[bench] ${incomplete.length} run(s) were cut off before they finished; their scores are partial and are excluded from the mean`);
-      }
-    })
-    .catch((err: unknown) => {
-      console.error(`[bench] ${(err as Error).message}`);
-      process.exitCode = 1;
-    });
+  const matrix = parseModelMatrix(process.env["AGENT_TEAM_BENCH_MODELS"]);
+  const keepWorkspace = process.env["AGENT_TEAM_BENCH_DEBUG"] === "1";
+  const writeReport = (report: unknown): void => {
+    // The scores are written to a file so a CI job can publish them as an
+    // artifact: a method that is only ever measured locally is not measured.
+    try {
+      fs.writeFileSync(path.resolve(repoRoot(), "bench-scores.json"), `${JSON.stringify(report, null, 2)}\n`);
+    } catch {
+      // a read-only checkout is not a reason to fail the run
+    }
+    console.log(JSON.stringify(report, null, 2));
+  };
+  const fail = (err: unknown): void => {
+    console.error(`[bench] ${(err as Error).message}`);
+    process.exitCode = 1;
+  };
+  if (modelMode && matrix.length > 0) {
+    runBenchAcrossModels(matrix, { keepWorkspace })
+      .then((runs) => {
+        const variance = varianceReport(runs);
+        const all = runs.flatMap((run) => run.results);
+        const complete = all.filter((r) => r.status === "evaluated" && r.incomplete !== true);
+        const incomplete = all.filter((r) => r.incomplete === true);
+        writeReport({
+          version: 4,
+          mode: "model-matrix",
+          cases: enabledCases().length,
+          models: matrix,
+          evaluated: complete.length,
+          incomplete: incomplete.length,
+          variance,
+          unscoredDimensions: UNMACHINE_SCORED_DIMENSIONS,
+          judgements: all.flatMap((r) => (r.judgements ?? []).map((j) => ({ ...j, caseId: r.caseId }))),
+          runs,
+        });
+        // Only a run that finished can fail the bench. A cross-model run
+        // fails when any model produced a complete score below 1, and the
+        // variance is the number a reviewer reads first.
+        if (complete.some((r) => (r.score ?? 0) < 1)) process.exitCode = 1;
+        if (incomplete.length > 0) {
+          console.error(`[bench] ${incomplete.length} run(s) were cut off before they finished; their scores are partial and are excluded from the variance`);
+        }
+      })
+      .catch(fail);
+  } else {
+    const runner = modelMode ? runBenchWithModel : runBench;
+    runner({ model: process.env["AGENT_TEAM_BENCH_MODEL"], keepWorkspace })
+      .then((results) => {
+        // The mean covers the runs that finished. An incomplete run has a
+        // partial measurement, and averaging it in would report a number the
+        // bench did not actually earn.
+        const complete = results.filter((r) => r.status === "evaluated" && r.incomplete !== true);
+        const incomplete = results.filter((r) => r.incomplete === true);
+        const mean = complete.length === 0 ? null : Math.round((complete.reduce((s, r) => s + (r.score ?? 0), 0) / complete.length) * 100) / 100;
+        writeReport({
+          version: 3,
+          mode: modelMode ? "model" : "dry",
+          cases: results.length,
+          evaluated: complete.length,
+          incomplete: incomplete.length,
+          meanScore: mean,
+          unscoredDimensions: UNMACHINE_SCORED_DIMENSIONS,
+          judgements: results.flatMap((r) => (r.judgements ?? []).map((j) => ({ ...j, caseId: r.caseId }))),
+          results,
+        });
+        // Only a run that finished can fail the bench. An incomplete run is
+        // reported, not punished.
+        if (modelMode && complete.some((r) => (r.score ?? 0) < 1)) process.exitCode = 1;
+        if (modelMode && incomplete.length > 0) {
+          console.error(`[bench] ${incomplete.length} run(s) were cut off before they finished; their scores are partial and are excluded from the mean`);
+        }
+      })
+      .catch(fail);
+  }
 }

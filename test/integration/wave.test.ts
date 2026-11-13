@@ -24,11 +24,10 @@ function runtimeFor(root: string): AgentTeamRuntime {
     { location: { project: { canonical: root } }, options: {}, app: { version: "2.2.0" }, session: { create: async () => ({ id: `ses_child_${++n}` }), prompt: async () => ({}) } } as never,
     {
       profile: "public",
-      strictEvidence: true,
       projectState: ".agent-team",
       telemetry: false,
       autonomy: { mode: "yolo", askBefore: [] },
-      orchestration: { maxParallelSpecialists: 6, allowedCheckPrefixes: [] },
+      orchestration: { maxParallelSpecialists: 6, allowedCheckPrefixes: [], archiveChildSessions: true },
     },
   );
 }
@@ -173,7 +172,7 @@ describe("a delivery cannot change after it was accepted", () => {
       activeDelivery: {
         id: "DEL-001", title: "t", userOutcome: "u", entryState: "e", happyPath: ["h"],
         inScope: [], outOfScope: [], allowedScope: ["src/a.ts"], prohibitedScope: [],
-        acceptanceCriteria: ["AC-1"], validationSteps: ["npm test"], proof: [],
+        acceptanceCriteria: ["AC-1"], validationSteps: [{ criterionId: "AC-1", command: "npm test" }], proof: [],
         risks: [], rollback: "revert", owner: "team-leader", status: "IN_PROGRESS",
       },
     }));
@@ -233,4 +232,67 @@ describe("a delivery cannot change after it was accepted", () => {
     const deliver = JSON.parse((await executeGate(runtime, { gate: "DELIVER", claim: "ship", expectedRevision: rev }, leader)).content);
     expect(deliver.result).toBe("PASS");
   });
+
+  it("refuses a change wave without an explorer, and a recorded override unlocks it", async () => {
+    const { runtime } = await freshRuntime();
+    await executeState(runtime, { action: "route", expectedRevision: 0, engagementClass: "change", namesFileAndSymptom: false, reason: "router" }, leader);
+    await expect(
+      executeHandoff(runtime, { action: "launch", expectedRevision: 1, units: [{ ...UNIT, role: "coder" as const, objective: "implement" }] }, leader),
+    ).rejects.toThrow(/book a team-leader\/explorer/);
+    // The explorer satisfies the route.
+    const explored = JSON.parse((await executeHandoff(runtime, { action: "launch", expectedRevision: 1, units: [UNIT] }, leader)).content);
+    expect(explored.ids).toEqual(["HND-0001"]);
+
+    const { runtime: other } = await freshRuntime();
+    await executeState(other, { action: "route", expectedRevision: 0, engagementClass: "change", namesFileAndSymptom: false, reason: "router" }, leader);
+    await executeState(other, { action: "route", expectedRevision: 1, namesFileAndSymptom: true, reason: "the file is known" }, leader);
+    const direct = JSON.parse((await executeHandoff(other, { action: "launch", expectedRevision: 2, units: [{ ...UNIT, role: "coder" as const, objective: "implement" }] }, leader)).content);
+    expect(direct.ids).toEqual(["HND-0001"]);
+  });
+
+  it("refuses a reviewer that does not depend on the implementation it reviews", async () => {
+    const { runtime } = await freshRuntime();
+    const coder = JSON.parse(
+      (await executeHandoff(runtime, { action: "launch", expectedRevision: 0, units: [{ ...UNIT, role: "coder" as const, objective: "implement" }] }, leader)).content,
+    );
+    await expect(
+      executeHandoff(runtime, { action: "launch", expectedRevision: 1, units: [{ ...UNIT, role: "reviewer" as const, objective: "review", allowedScope: ["src/**"] }] }, leader),
+    ).rejects.toThrow(/must depend on the implementation/);
+    const reviewed = JSON.parse(
+      (
+        await executeHandoff(
+          runtime,
+          { action: "launch", expectedRevision: 1, units: [{ ...UNIT, role: "reviewer" as const, objective: "review", allowedScope: ["src/**"], dependsOn: [coder.ids[0]] }] },
+          leader,
+        )
+      ).content,
+    );
+    expect(reviewed.ids).toEqual(["HND-0002"]);
+  });
+
+  it("stamps one wave id per launch call, so a wave is readable from the ledger", async () => {
+    const { runtime, root } = await freshRuntime();
+    const first = JSON.parse(
+      (
+        await executeHandoff(
+          runtime,
+          {
+            action: "launch",
+            expectedRevision: 0,
+            units: [UNIT, { ...UNIT, role: "worker" as const, objective: "write the memo", allowedScope: ["docs/**"] }],
+          },
+          leader,
+        )
+      ).content,
+    );
+    expect(first.wave).toBe("WV-001");
+    const state = await readState(root);
+    expect(state!.handoffs.map((h) => h.wave)).toEqual(["WV-001", "WV-001"]);
+    const second = JSON.parse(
+      (await executeHandoff(runtime, { action: "launch", expectedRevision: state!.revision, units: [UNIT] }, leader)).content,
+    );
+    expect(second.wave).toBe("WV-002");
+    expect((await readState(root))!.handoffs.map((h) => h.wave)).toEqual(["WV-001", "WV-001", "WV-002"]);
+  });
+
 });

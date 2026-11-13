@@ -18,7 +18,7 @@ function runtimeWith(decisions: unknown, models: unknown[] = []): AgentTeamRunti
       experimental: { generate: { decisions: async () => decisions } },
       session: { create: async () => ({ id: "ses_child" }), prompt: async () => ({}), synthetic: async () => ({}) },
     } as never,
-    { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false } as never,
+    { profile: "public", projectState: ".agent-team", telemetry: false } as never,
   );
 }
 
@@ -77,7 +77,7 @@ describe("the prompt router", () => {
         experimental: { generate: { decisions: async () => { calls += 1; return answers("change", 0.99, 0.99); } } },
         session: { create: async () => ({ id: "ses_child" }), prompt: async () => ({}), synthetic: async () => ({}) },
       } as never,
-      { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false } as never,
+      { profile: "public", projectState: ".agent-team", telemetry: false } as never,
     );
     await routePrompt(runtime, "ses_d", "change the board");
     await routePrompt(runtime, "ses_d", "change the board");

@@ -22,11 +22,11 @@ describe("schema 3 migration", () => {
     expect(migrated.evidence[0]?.observed).toBe(false);
   });
 
-  it("returns a version 3 state unchanged and refuses an unknown one", () => {
-    const state = { schemaVersion: 3 };
+  it("returns a version 4 state unchanged and refuses an unknown one", () => {
+    const state = { schemaVersion: 4 };
     expect(migrateUnknown(state)).toBe(state);
-    expect(needsMigration(2)).toBe(true);
-    expect(needsMigration(3)).toBe(false);
+    expect(needsMigration(3)).toBe(true);
+    expect(needsMigration(4)).toBe(false);
     expect(() => migrateUnknown({ schemaVersion: 7 })).toThrow(/unsupported/);
   });
 });
@@ -56,7 +56,7 @@ describe("ledger guard branches", () => {
       app: { version: "2.2.0" },
       location: { project: { canonical: root } },
       session: { create: async () => ({ id: "ses_x" }), prompt: async () => ({}) },
-    } as never, { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false } as never);
+    } as never, { profile: "public", projectState: ".agent-team", telemetry: false } as never);
     const leader = { sessionID: "s", agent: "team-leader" } as never;
     const specialist = { sessionID: "s", agent: "team-leader/coder" } as never;
     await expect(executeAssumption(runtime, { expectedRevision: 0, statement: "s", basis: "INFERENCE", confidence: "medium", impact: "i" }, specialist)).rejects.toThrow(/only team-leader/);
@@ -76,7 +76,7 @@ describe("v1 migration defaults", () => {
       outcome: "O",
       nextAction: { description: "n", owner: "team-leader" },
     }) as { schemaVersion: number; evidence: unknown[]; handoffs: unknown[]; activeDelivery?: unknown };
-    expect(migrated.schemaVersion).toBe(3);
+    expect(migrated.schemaVersion).toBe(4);
     expect(migrated.evidence).toEqual([]);
     expect(migrated.handoffs).toEqual([]);
     expect(migrated.activeDelivery).toBeUndefined();

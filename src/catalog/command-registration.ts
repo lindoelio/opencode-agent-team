@@ -134,7 +134,6 @@ export async function registerCommands(runtime: AgentTeamRuntime): Promise<{ dis
                   ? defaultAgentTeamOptions()
                   : {
                       profile: runtime.options.profile,
-                      strictEvidence: runtime.options.strictEvidence,
                       projectState: runtime.options.projectState,
                       telemetry: false,
                     },

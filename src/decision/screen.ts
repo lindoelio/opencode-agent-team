@@ -11,18 +11,24 @@ import { redactText } from "../ledger/redaction.js";
  */
 
 /**
- * The six families that would redirect a judgement.
+ * The six families that would redirect a judgement, in English, Portuguese
+ * and Spanish.
  *
  * The match is per line and may land anywhere within the line: what matters
  * is the line's content, not where the phrase sits in it.
  */
 const DECISION_OVERRIDE_PATTERNS: RegExp[] = [
   /ignore\s+(prior|previous|all)\s+instructions/i,
-  /execute\s+(this\s+)?command/i,
+  /ignora\s+(as\s+)?(instru(?:ções|cciones)|ordens)\s+(anteriores|prévias|todas|previas)/i,
+  /execute\s+(this|the\s+following)\s+command/i,
+  /execute\s+(o\s+)?(seguinte\s+)?comando/i,
   /upload\s+(this|any|all|your)\b/i,
   /disregard\s+.*policy/i,
+  /desconsidera\s+.*pol[ií]tica/i,
   /bypass\s+.*(policy|protection|approval)/i,
+  /contorna\s+.*(prote(c|ç)[ãa]o|pol[ií]tica)/i,
   /override\s+.*(answer|verdict|score|decision|result)/i,
+  /sobrescreve\s+.*(resposta|veredito|pontua(c|ç)[ãa]o|decis[aã]o)/i,
 ];
 
 export interface ScreenedState {

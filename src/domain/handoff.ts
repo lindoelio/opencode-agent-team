@@ -3,66 +3,32 @@ import { SpecialistResultSchema, SpecialistRoleSchema, type RiskRef, type Specia
 export const HANDOFF_ROLES = SpecialistRoleSchema.options;
 export type HandoffRole = (typeof HANDOFF_ROLES)[number];
 
-export interface HandoffPacket {
-  handoff_id: string;
-  role: HandoffRole;
-  objective: string;
-  context: string[];
-  scope: { allowed: string[]; prohibited: string[] };
-  questions_to_answer: string[];
-  required_evidence: string[];
-  /** Skills the specialist must load before acting. */
-  skills: string[];
-  /** Handoff ids that must complete before this one can start. */
-  depends_on: string[];
-  output_schema: "SpecialistResult@1";
-  stop_condition: string;
-}
+/**
+ * Roles whose contract forbids editing. They may not spawn a helper agent
+ * either: a helper could edit or shell, which would make the role's read-only
+ * contract unenforceable. The context hook denies the subagent tool and the
+ * child prompt states the same boundary — one set, so the three cannot
+ * disagree.
+ */
+export const READ_ONLY_ROLES: ReadonlySet<HandoffRole> = new Set([
+  "explorer",
+  "product",
+  "architect",
+  "reviewer",
+  "security",
+]);
 
-export function buildPacket(input: {
-  id: string;
-  role: HandoffRole;
-  objective: string;
-  context: string[];
-  allowedScope: string[];
-  prohibitedScope: string[];
-  questions: string[];
-  requiredEvidence: string[];
-  stopCondition: string;
-  skills?: string[];
-  dependsOn?: string[];
-}): HandoffPacket {
-  return {
-    handoff_id: input.id,
-    role: input.role,
-    objective: input.objective,
-    context: input.context,
-    scope: { allowed: input.allowedScope, prohibited: input.prohibitedScope },
-    questions_to_answer: input.questions,
-    required_evidence: input.requiredEvidence,
-    skills: input.skills ?? [],
-    depends_on: input.dependsOn ?? [],
-    output_schema: "SpecialistResult@1",
-    stop_condition: input.stopCondition,
-  };
-}
-
-export function renderPacketPrompt(p: HandoffPacket): string {
-  return [
-    `You are team-leader/${p.role}. Bounded handoff ${p.handoff_id}.`,
-    `Objective: ${p.objective}`,
-    `Allowed scope: ${p.scope.allowed.join(", ") || "(none)"}`,
-    `Prohibited scope: ${p.scope.prohibited.join(", ") || "(none)"}`,
-    `Questions to answer: ${p.questions_to_answer.join(" | ") || "(none)"}`,
-    `Required evidence: ${p.required_evidence.join(" | ") || "(none)"}`,
-    `Role procedure: ${p.skills.join(", ") || "(none specified — follow the injected role procedure)"}`,
-    ...(p.depends_on.length > 0 ? [`Wait for these handoffs to complete before starting: ${p.depends_on.join(", ")}`] : []),
-    `Stop when: ${p.stop_condition}`,
-    `Call agent_team_report with SpecialistResult@1 JSON: status PASS|FAIL|BLOCKED|ADVISORY, summary, findings[{severity,claim,evidence}], risks, unknowns, recommended_next_action. Do not return it as prose for the leader to copy.`,
-    `Act autonomously; do not ask for authorization unless a registered guardrail covers the action.`,
-    `You may launch built-in OpenCode helper agents (e.g. explore, general); never create team-leader/* agents. Do not claim completion without evidence.`,
-  ].join("\n");
-}
+/**
+ * The canonical specialist report shape.
+ *
+ * It travels in every child prompt: the strict schema is only discoverable
+ * through a failed tool call otherwise, which costs a weak model a turn that
+ * a strong model never spends. One line, one shape, every role.
+ */
+export const REPORT_SHAPE_LINE =
+  "Report shape (SpecialistResult@1, strict): { status: PASS|FAIL|BLOCKED|ADVISORY, summary, " +
+  "findings[{severity: critical|high|medium|low|note, claim, evidence[]}], risks[], unknowns[], recommended_next_action }. " +
+  "Call agent_team_report with it and stop; do not return the result as prose for the leader to copy.";
 
 /**
  * Validates a specialist result against the closed `SpecialistResult@1`
@@ -76,6 +42,26 @@ export function validateResult(result: unknown): SpecialistResult {
     throw new Error(`invalid specialist result: ${parsed.error.message}`);
   }
   return parsed.data;
+}
+
+/**
+ * True when at least one wave carried two or more units.
+ *
+ * The wave id is the ledger's own record of what was booked together, so
+ * parallelism is measured from the artifact rather than from the host's
+ * subagent trace — which the wave API does not produce. A handoff booked
+ * before waves existed carries no id and is not counted either way.
+ */
+export function handoffsRunInParallel(handoffs: ReadonlyArray<{ wave?: string }>): boolean {
+  const perWave = new Map<string, number>();
+  for (const h of handoffs) {
+    if (!h.wave) continue;
+    perWave.set(h.wave, (perWave.get(h.wave) ?? 0) + 1);
+  }
+  for (const count of perWave.values()) {
+    if (count >= 2) return true;
+  }
+  return false;
 }
 
 const SEVERITY_RANK: Record<string, number> = { note: 0, low: 1, medium: 2, high: 3, critical: 4 };

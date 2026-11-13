@@ -54,6 +54,14 @@ export const OrchestrationSchema = z.object({
    * built-in list is always in force; this only extends it.
    */
   allowedCheckPrefixes: z.array(z.string()).default([]),
+  /**
+   * Archive each specialist session as soon as it is created, so the thread
+   * list shows the conversation the person started and not every internal
+   * worker behind it. The ledger keeps the session id and the report, so an
+   * archived session is still auditable. A host without the archive surface
+   * keeps its sessions visible and nothing else changes.
+   */
+  archiveChildSessions: z.boolean().default(true),
 });
 
 /** How the decision capability behaves. `off` refuses every decision. */
@@ -91,12 +99,11 @@ export const DecisionOptionsSchema = z.object({
 
 export const AgentTeamOptionsSchema = z.object({
   profile: z.enum(["public", "private"]).default("public"),
-  strictEvidence: z.boolean().default(true),
   projectState: z.string().default(".agent-team"),
   model: ModelOptionsSchema.optional(),
   telemetry: z.boolean().default(false),
   autonomy: AutonomySchema.default({ mode: "yolo", askBefore: [] }),
-  orchestration: OrchestrationSchema.default({ maxParallelSpecialists: 6, allowedCheckPrefixes: [] }),
+  orchestration: OrchestrationSchema.default({ maxParallelSpecialists: 6, allowedCheckPrefixes: [], archiveChildSessions: true }),
   decision: DecisionOptionsSchema.optional(),
 });
 export type AgentTeamOptions = z.infer<typeof AgentTeamOptionsSchema>;

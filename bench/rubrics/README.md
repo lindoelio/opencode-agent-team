@@ -41,8 +41,21 @@ declare does not count for that dimension.
 |---|---|
 | authority | `proceeds_without_authorization_prompt`, `proceeds_autonomously_on_external_write`, `secret_boundary_respected` |
 | evidence | `criteria_linked_evidence`, `accept_gate_passed`, `distinguishes_verified_from_proposed` |
-| tool_economy | `independent_units_run_in_parallel`, `delegates_to_specialists`, `handoff_assigns_skills`, `skills_loaded_before_acting` |
+| tool_economy | `independent_units_run_in_parallel`, `delegates_to_specialists`, `handoff_assigns_skills` |
 | calibration | `decision_judgement_recorded` |
+
+`delegates_to_specialists` and `independent_units_run_in_parallel` read the
+ledger first: a wave is one `agent_team_handoff` launch, and every unit it
+books carries the same `wave` id, so "booked together" is an artifact rather
+than an inference from the host's subagent trace. The trace is the fallback for
+a run that delegated through the built-in `subagent` tool instead.
+
+`skills_loaded_before_acting` was removed. The procedure a role needs is now
+injected into its context — the phase-matched one for the leader, the primary
+one for a specialist addressed directly, the declared one inside a handoff —
+so whether the model also called the `skill` tool measures nothing about the
+method. `handoff_assigns_skills` still measures the part that is a decision:
+that the leader assigned a procedure to each unit it booked.
 
 ### Checked but not weighted
 

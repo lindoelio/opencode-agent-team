@@ -76,7 +76,7 @@ describe("the v1 to v2 migration", () => {
     fs.writeFileSync(path.join(root, ".agent-team", "state.json"), JSON.stringify(v1));
     const { readState } = await import("../../src/ledger/store.js");
     const migrated = await readState(root);
-    expect(migrated?.schemaVersion).toBe(3);
+    expect(migrated?.schemaVersion).toBe(4);
     // the v1 role name becomes the v2 one
     expect(migrated?.handoffs[0]?.role).toBe("reviewer");
     // the v1 gate name becomes the v2 one
@@ -110,7 +110,7 @@ describe("the doctor on a host it cannot read fully", () => {
       permission: { hook: noop },
     } as never;
     const runtime = createRuntime(ctx, {
-      profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false,
+      profile: "public", projectState: ".agent-team", telemetry: false,
       autonomy: { mode: "guarded", askBefore: ["deploy prod"] },
       model: { reasoningEffort: "high" },
     } as never);
@@ -129,7 +129,7 @@ describe("the optional fields every tool accepts", () => {
   function runtimeFor(root: string): ReturnType<typeof createRuntime> {
     return createRuntime(
       { location: { project: { canonical: root } }, options: {}, app: { version: "2.2.0" }, session: { create: async () => ({ id: "ses_child" }), prompt: async () => ({}) } } as never,
-      { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false, autonomy: { mode: "yolo", askBefore: [] } } as never,
+      { profile: "public", projectState: ".agent-team", telemetry: false, autonomy: { mode: "yolo", askBefore: [] } } as never,
     );
   }
 
@@ -185,7 +185,7 @@ describe("the optional fields every tool accepts", () => {
             expectedRevision: 0, title: "T", userOutcome: "u", entryState: "e",
             happyPath: ["a"], inScope: ["i"], outOfScope: ["o"],
             allowedScope: ["src/**"], prohibitedScope: ["src/secret.ts"],
-            acceptanceCriteria: ["AC-1"], validationSteps: ["npm test"],
+            acceptanceCriteria: ["AC-1"], validationSteps: [{ criterionId: "AC-1", command: "npm test" }],
             proof: [{ kind: "functional", claim: "c", ref: "r" }],
             risks: ["risk"], rollback: "revert", owner: "team-leader", status: "IN_PROGRESS",
           },

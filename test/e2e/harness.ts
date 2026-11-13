@@ -38,12 +38,28 @@ export function requireOpenCode(): void {
 /** True when the suite can run at all. */
 export const E2E_RUNNABLE = E2E_ENABLED && openCodeAvailable();
 
+/**
+ * The per-run timeout, owned by the harness — never by the plugin.
+ *
+ * The plugin has no work-time limit per handoff; a run that legitimately takes
+ * longer than this is a harness limit, and `AGENT_TEAM_E2E_TIMEOUT_MS` raises
+ * it without touching the plugin.
+ */
+export const E2E_TIMEOUT_MS = Number(process.env["AGENT_TEAM_E2E_TIMEOUT_MS"] ?? 1_800_000);
+
+/** The vitest timeout must outlast the run it wraps. */
+export const E2E_TEST_TIMEOUT_MS = E2E_TIMEOUT_MS + 120_000;
+
 export interface Workspace {
   root: string;
   cleanup: () => Promise<void>;
 }
 
-export async function makeWorkspace(fixture: "sample-task-board" | "clean-project" = "sample-task-board", seed: Record<string, string> = {}): Promise<Workspace> {
+export async function makeWorkspace(
+  fixture: "sample-task-board" | "clean-project" = "sample-task-board",
+  seed: Record<string, string> = {},
+  pluginOptions?: Record<string, unknown>,
+): Promise<Workspace> {
   const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-e2e-"));
   const source = path.join(repoRoot(), "fixtures", fixture);
   await fs.promises.cp(source, root, { recursive: true });
@@ -55,8 +71,9 @@ export async function makeWorkspace(fixture: "sample-task-board" | "clean-projec
   // materialized by the setup, not something the plugin registers at runtime.
   await materializeRoster(root);
   // The config points at this checkout, not at the registry, so the run never
-  // depends on the package being published.
-  await createProject(root, repoRoot());
+  // depends on the package being published. Options let a test pin the
+  // decision model it means to exercise.
+  await createProject(root, repoRoot(), {}, pluginOptions);
   return { root, cleanup: async () => { await fs.promises.rm(root, { recursive: true, force: true }); } };
 }
 
@@ -72,13 +89,14 @@ export interface LedgerShape {
     allowedScope: string[];
     prohibitedScope: string[];
     acceptanceCriteria: string[];
-    validationSteps: string[];
+    validationSteps: Array<{ criterionId: string; command: string }>;
     proof: Array<{ kind: string }>;
     rollback: string;
   };
-  evidence: Array<{ id: string; criterionId: string; kind: string; status: string; command?: string; artifactRef?: string }>;
+  evidence: Array<{ id: string; criterionId: string; kind: string; status: string; command?: string; artifactRef?: string; observed?: boolean }>;
   gates: Array<{ gate: string; result: string; satisfied: string[]; missing: string[] }>;
-  handoffs: Array<{ id: string; role: string; status: string; skills: string[]; dependsOn: string[] }>;
+  handoffs: Array<{ id: string; role: string; status: string; skills: string[]; dependsOn: string[]; wave?: string }>;
+  route?: { engagementClass?: string; namesFileAndSymptom?: boolean; riskSignal?: boolean; overridden?: boolean; reason?: string };
   approvals: Array<{ id: string; status: string }>;
   nextAction: { description: string; owner: string };
 }
@@ -108,7 +126,7 @@ export function agentTeamToolNames(run: OpenCodeRun): string[] {
   return run.trace.agentTeamTools;
 }
 
-export async function runAgent(ws: Workspace, agent: string, prompt: string, timeoutMs = 900_000): Promise<OpenCodeRun> {
+export async function runAgent(ws: Workspace, agent: string, prompt: string, timeoutMs = E2E_TIMEOUT_MS): Promise<OpenCodeRun> {
   return await runOpenCode({ cwd: ws.root, agent, prompt, timeoutMs, model: process.env["AGENT_TEAM_E2E_MODEL"] });
 }
 

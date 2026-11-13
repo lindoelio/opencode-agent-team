@@ -98,6 +98,31 @@ writes the wrong plugin spec into a consumer's `opencode.jsonc`.
 means editing both. Templates must start with `---\n` at byte 0 and must **not** contain the
 `AGENT-TEAM-MANAGED` marker — it is appended only at apply time.
 
+**Prompt text has one authoritative source per surface.** The constitution lives in
+`src/catalog/constitution.ts` and is injected by the context hook; do not re-inline a second
+copy in an agent template. `ROLE_CONTRACTS` in `src/hooks/context.ts` is the authoritative
+role contract because it survives a user edit to the template; the template prose is the
+human-facing copy. The child prompt for a specialist is built only by `childPrompt` in
+`src/orchestrator/launch.ts` — a second renderer drifts (one did, and it was removed).
+
+**Validation steps are pairs, not positions.** `validationSteps` in a Delivery Contract is
+`Array<{criterionId, command}>`; the gate, the observer and the projection read the pairing
+directly. Do not reintroduce positional pairing — it made a multi-criterion delivery
+unsatisfiable and was invisible to every prompt surface.
+
+**Evidence algebra runs through `effectiveEvidence`.** The gate and the projection must read
+the same effective set in `src/domain/evidence.ts`: the latest observation per
+`(criterion, command)`, with an observed row outranking a later typed one. Reading raw
+`state.evidence` in a new surface reintroduces the "one failed run poisons the criterion
+forever" bug.
+
+**Helper writes inherit the handoff through session lineage.** `src/orchestrator/lineage.ts`
+feeds the tool audit; a helper agent a specialist launches is held to the same writable scope
+and shell allowlist. The relation arrives through `session.created` events, and a missing one
+is resolved once from the host's session record and cached — do not remove the lazy fallback,
+or a host that never emits the event silently loses the boundary. Adding a tool that writes
+files or runs shells outside that check creates the bypass the lineage exists to close.
+
 **Relative imports carry a `.js` extension** even though the file on disk is `.ts`
 (`NodeNext` resolution requires it), and `verbatimModuleSyntax` is on, so type-only imports
 need `import type`. Declare functions with `export function`, not `export const fn = () => {}`.

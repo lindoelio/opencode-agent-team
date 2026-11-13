@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as path from "node:path";
-import { E2E_RUNNABLE, agentTeamToolNames, finalText, ledger, makeWorkspace, readFile, requireOpenCode, runAgent, subagentRoles } from "./harness.js";
-import { observedParallelism } from "../../bench/runners/observables.js";
+import { E2E_RUNNABLE, E2E_TEST_TIMEOUT_MS, agentTeamToolNames, finalText, ledger, makeWorkspace, readFile, requireOpenCode, runAgent } from "./harness.js";
+import { handoffsRunInParallel } from "../../src/domain/handoff.js";
 
 /**
  * The team leader, end to end against a real model: a real delivery, real
@@ -15,30 +15,41 @@ describe.skipIf(!E2E_RUNNABLE)("team leader end to end (real model)", () => {
       const run = await runAgent(
         ws,
         "team-leader",
-        "Add a 'priority' field (high|normal|low, default normal) to tasks in src/board.ts, with a test. Use the Agent Team tools throughout: define the delivery, record the decision, delegate the implementation and the independent review, submit criterion-linked evidence, and evaluate the gates.",
+        "Add a 'priority' field (high|normal|low, default normal) to tasks in src/board.ts, with a test. Use the Agent Team tools throughout: define the delivery, record the decision, delegate the implementation and the independent review, submit criterion-linked evidence, and evaluate the INTENT, PLAN, VERIFY, REVIEW and ACCEPT gates specifically. Declare the validation step(s) with the command exactly `node --test test/board.node-test.mjs` — this project runs offline with the Node test runner, so do not use npx/vitest or wrap the command in cd or a pipe — and have the specialist run that exact command.",
       );
       expect(run.timedOut).toBe(false);
       expect(run.exitCode).toBe(0);
 
-      // the leader loaded procedures before acting
-      expect(run.trace.skillsLoaded.length).toBeGreaterThan(0);
-      expect(run.trace.skillsLoaded).toContain("agent-team-delivery-execution");
+      // The procedure is injected into the leader's context by phase, so a
+      // `skill` tool call is not evidence of anything here; the ledger and the
+      // files below are what the run has to prove.
 
-      // it used the whole tool surface of the method
+      // it used the whole tool surface of the method. `submit_evidence` is
+      // not required here: an observed check is recorded by the plugin, and
+      // the tool exists for rows observation cannot produce.
       const tools = agentTeamToolNames(run);
-      for (const expected of ["define_delivery", "handoff", "submit_evidence", "evaluate_gate"]) {
+      for (const expected of ["define_delivery", "handoff", "evaluate_gate"]) {
         expect(tools).toContain(expected);
       }
 
-      // it delegated to the right specialists
-      const roles = subagentRoles(run);
-      expect(roles.some((r) => r.includes("explorer"))).toBe(true);
-      expect(roles.some((r) => r.includes("coder"))).toBe(true);
-      expect(roles.some((r) => r.includes("reviewer"))).toBe(true);
-
+      // it delegated to the right specialists. A wave is booked through
+      // agent_team_handoff and never appears as a host subagent call, so the
+      // ledger is the artifact that records the delegation.
       const state = ledger(ws);
       expect(state).not.toBeNull();
-      expect(state!.schemaVersion).toBe(3);
+      expect(state!.schemaVersion).toBe(4);
+      const roles = state!.handoffs.map((h) => h.role);
+      // Discovery is skipped only when the route allows it: a `fix` skips it
+      // by design, and a `change` skips it only through a recorded override.
+      // It is never silent.
+      if (!roles.includes("explorer")) {
+        const route = state!.route;
+        const fixRoute = route?.engagementClass === "fix";
+        const recordedOverride = route?.overridden === true && route.namesFileAndSymptom === true;
+        expect(fixRoute || recordedOverride, "discovery was skipped without a fix route or a recorded override").toBe(true);
+      }
+      expect(roles.some((r) => r.includes("coder"))).toBe(true);
+      expect(roles.some((r) => r.includes("reviewer"))).toBe(true);
 
       // the delivery is registered and complete
       const delivery = state!.activeDelivery;
@@ -80,7 +91,7 @@ describe.skipIf(!E2E_RUNNABLE)("team leader end to end (real model)", () => {
       // and the work is real
       const board = readFile(ws, "src/board.ts") ?? "";
       expect(board).toMatch(/priority/i);
-      const tests = readFile(ws, "src/board.test.ts") ?? "";
+      const tests = `${readFile(ws, "src/board.test.ts") ?? ""}\n${readFile(ws, "test/board.node-test.mjs") ?? ""}`;
       expect(tests).toMatch(/priority/i);
 
       // the final report is verdict-first, not a transcript
@@ -90,7 +101,7 @@ describe.skipIf(!E2E_RUNNABLE)("team leader end to end (real model)", () => {
     } finally {
       await ws.cleanup();
     }
-  }, 1_500_000);
+  }, E2E_TEST_TIMEOUT_MS);
 
   it("runs independent units in parallel instead of one at a time", async () => {
     requireOpenCode();
@@ -99,18 +110,21 @@ describe.skipIf(!E2E_RUNNABLE)("team leader end to end (real model)", () => {
       const run = await runAgent(
         ws,
         "team-leader",
-        "Produce two independent documents: write a short note about local-first software to docs/local-first.md and a short note about event-sourced systems to docs/event-sourcing.md. They are independent; do not wait for one to finish before starting the other. Delegate each one.",
+        "Produce two independent documents: write a short note about local-first software to docs/local-first.md and a short note about event-sourced systems to docs/event-sourcing.md. They are independent; do not wait for one to finish before starting the other. Delegate each one. If the Agent Team route requires discovery, book the explorer first; then book the two writers in a single wave.",
       );
       expect(run.timedOut).toBe(false);
-      // more than one specialist was spawned
-      expect(run.trace.subagents.length).toBeGreaterThanOrEqual(2);
-      // and they really overlapped in time: a wave, not a queue
-      expect(observedParallelism(run.trace)).toBe(true);
+      // two units were booked, and they were booked together: one wave, not a
+      // queue. The wave id is the ledger's own record of what was booked in
+      // one call — the host's subagent trace does not see the wave API.
+      const state = ledger(ws);
+      const handoffs = state?.handoffs ?? [];
+      expect(handoffs.length).toBeGreaterThanOrEqual(2);
+      expect(handoffsRunInParallel(handoffs)).toBe(true);
       // and the artifacts exist
       expect(readFile(ws, "docs/local-first.md") ?? "").not.toBe("");
       expect(readFile(ws, "docs/event-sourcing.md") ?? "").not.toBe("");
     } finally {
       await ws.cleanup();
     }
-  }, 1_200_000);
+  }, E2E_TEST_TIMEOUT_MS);
 });

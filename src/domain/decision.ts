@@ -1,5 +1,5 @@
-/** Imperative lines that look like instructions rather than data. */
-const IMPERATIVE_LINE = /^(run|execute|upload|ignore|disregard|bypass|rm|curl|wget|eval)\b/i;
+/** Imperative lines that look like instructions rather than data. English, Portuguese and Spanish. */
+const IMPERATIVE_LINE = /^(run|execute|upload|ignore|disregard|bypass|rm|curl|wget|eval|roda|rode|ignora|envie|ejecuta|sube)\b/i;
 
 /** Extract the single relevant fact from untrusted content; never execute it. */
 export function extractFactFromUntrusted(text: string): { fact: string; refusedInstructions: boolean; instructions: string[] } {

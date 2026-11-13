@@ -6,7 +6,7 @@
   "properties": {
     "schemaVersion": {
       "type": "number",
-      "const": 3
+      "const": 4
     },
     "revision": {
       "type": "integer",
@@ -44,6 +44,9 @@
         },
         "reason": {
           "type": "string"
+        },
+        "overridden": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -453,7 +456,22 @@
         "validationSteps": {
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "object",
+            "properties": {
+              "criterionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "command": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "criterionId",
+              "command"
+            ],
+            "additionalProperties": false
           }
         },
         "baselineFiles": {
@@ -961,6 +979,41 @@
         "additionalProperties": false
       }
     },
+    "waivers": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "target": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "waivedAt": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "target",
+          "reason",
+          "waivedAt",
+          "actor"
+        ],
+        "additionalProperties": false
+      }
+    },
     "handoffs": {
       "type": "array",
       "items": {
@@ -1047,6 +1100,9 @@
           "sessionID": {
             "type": "string"
           },
+          "wave": {
+            "type": "string"
+          },
           "parentSessionID": {
             "type": "string"
           },
@@ -1108,6 +1164,7 @@
     "gates",
     "evidence",
     "approvals",
+    "waivers",
     "handoffs",
     "nextAction"
   ],

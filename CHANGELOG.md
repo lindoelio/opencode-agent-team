@@ -7,6 +7,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Schema 4: explicit evidence pairing and waivers.** `validationSteps` is no
+  longer a list of commands paired to criteria by position — each step names
+  the `criterionId` it proves, and registration refuses a step bound to an
+  undeclared criterion or a criterion with no check of its own. A waiver
+  (`agent_team_state action: "waive"`) is the only relaxation path: it never
+  fabricates evidence, it is recorded with a reason, and it stays visible in
+  the gate result and the projection.
+- **Route override.** `agent_team_state action: "route"` lets the leader
+  correct the decision model's routing (the engagement class and the explorer
+  decision) with a recorded reason. The override is sticky within the
+  engagement; `riskSignal` is deliberately not overridable, because it only
+  adds a security lens.
+- **Helper-agent scope enforcement.** A built-in helper a specialist launches
+  inherits the handoff's writable scope and shell allowlist through session
+  lineage. The relation arrives through `session.created`; a missing one is
+  resolved from the host's session record once and cached, so a host that
+  never emits the event still gets the boundary enforced.
+- **Cross-model bench matrix.** `AGENT_TEAM_BENCH_MODELS` runs the same cases
+  across a list of models and reports the per-case score spread and its mean —
+  the consistency number the method claims to improve.
+- **Child sessions are archived when they settle.** A specialist session is
+  archived when its report lands or the booking fails, so the thread list shows
+  the work while it runs and keeps only the conversation the person started;
+  `orchestration.archiveChildSessions` (default `true`) can turn it off. The
+  archive is verified against the host's record: on a host whose plugin
+  runtime ignores `archived`, the report event says `failed` and why, and
+  `npm run sessions:archive -- --apply` archives the leftovers through the
+  host's HTTP API.
+- **Canonical child prompt.** "The handoff prompt now carries the unit's
+  `context`, the exact `SpecialistResult@1` shape, and the primary procedure of
+  the skill the leader declared for that unit."
+- **Multilingual injection detection.** The prompt and decision screens
+  recognize the instruction families in Portuguese and Spanish as well as
+  English, and the leader's own handoff prompt is exempt from quarantine
+  (it is the task, not retrieved text).
+
+### Changed
+
+- **Observation from the tool hook.** A completed shell a specialist runs is
+  recorded as observed evidence from the command, the exit code and the output
+  the host returns; the shell-ended event is the fallback. A host with no shell
+  surface can still produce verified evidence.
+- **Route and review guards.** A `change` wave without an explorer is refused
+  when the route does not name the file and the symptom; a reviewer must depend
+  on the implementation it reviews.
+- **The discipline e2e asserts the mechanical guarantee.** It checks that no
+  `pass` row is unobserved and no gate `PASS` names a criterion without an
+  observed pass; a prose claim is reported as a behavioral observation, not
+  treated as a plugin failure.
+- **The e2e harness timeout is configurable.** `AGENT_TEAM_E2E_TIMEOUT_MS`
+  raises it; it is a harness limit, not a plugin one — Agent Team imposes no
+  work-time limit on a specialist.
+
+- **Evidence is a time series.** A failed observation is superseded by a later
+  observed pass of the same check, and a typed claim never supersedes an
+  observed row. A fixed delivery can recover instead of staying poisoned.
+- **The report shape is in the tool schema.** `agent_team_report` declares the
+  `findings` object with the canonical severity enum, and every child prompt
+  states the strict result shape.
+- **The read-only helper boundary is one set.** The child prompt, the agent
+  templates and the context hook derive the read-only roles from the same
+  definition.
+- **Idle is not completion.** A booked session that goes idle is settled only
+  after a grace period; a session that is still idle is failed, and the reload
+  reconciliation checks the idle timestamp instead of its mere presence.
+- **The projection is bounded.** Completed handoffs and decisions are capped
+  with visible overflow counts; the waiver list is rendered.
+- **One constitution, one source.** The runtime injects the canonical
+  constitution; the leader template no longer carries a drifting second copy.
+
+### Removed
+
+- **`strictEvidence`.** The option was dead code: a `partial` row never
+  satisfied a criterion in either mode. A recorded waiver is the explicit,
+  auditable relaxation path instead.
+- **`buildPacket` / `renderPacketPrompt`.** A dead second copy of the child
+  prompt, missing its context and contradicting read-only roles. The launch
+  path is the single prompt builder.
+
+### Fixed
+
+- **Decision models were invisible to the plugin.** The host's model list
+  defaults to chat — the only type offered for sessions — so asking for no type
+  never returned a decision model; the plugin also expected a bare array while
+  the host wraps the list in `{ data }`. Discovery now asks for
+  `types: ["decision"]` and accepts both shapes, so JEV and the rest of the
+  System One family actually reach routing and `agent_team_evaluate_decision`.
+- **The prompt router never ran.** The prompt hook read `event.agent`, which
+  the host's prompt event does not carry, so the leader check was never true
+  and every prompt skipped routing. The role now comes from the session record,
+  which is where the host records it.
+
+- **ACCEPT could never recover from one failed check.** The gate read raw
+  evidence, so a failed run of a check poisoned its criterion forever; the
+  effective-evidence filter fixes the algebra and the projection reads the
+  same set.
+- **The reviewer coverage rule was addressed to the reviewer.** The leader
+  — who writes the reviewer's scope — is now told, in the leader template and
+  the execution skill, that the scope must cover every implementation and
+  changed path.
+- **The allowlist was invisible.** A refused validation step and a refused
+  specialist shell now name the effective allowed prefixes.
+- **A criterion with no step was silently unsatisfiable.** Registration now
+  returns a note naming the criteria that cannot receive observed evidence.
+- **The handoff `context` field was discarded.** It is required, recorded, and
+  now rendered in the specialist's prompt.
+- **A typed fail could un-prove an observed pass.** The effective set keeps the
+  observed row; only a later observation or a waiver changes it.
+
 ## [0.7.0] - 2026-11-10
 
 ### Added

@@ -11,11 +11,11 @@ import type { ToolContext } from "@opencode/plugin/promise/tool";
 export const AGENT_TEAM_STATE_TOOL = {
   name: "state",
   description:
-    "Initialize, read, transition, or register guardrails for the Agent Team engagement (optimistic revision, state machine validated). Guardrails are the only mechanism that makes Agent Team ask before an action; the default is autonomous execution.",
+    "Initialize, read, transition, register guardrails, waive a gate requirement, or override the route for the Agent Team engagement (optimistic revision, state machine validated). Guardrails are the only mechanism that makes Agent Team ask before an action; the default is autonomous execution. A waiver is the only relaxation path in the gate algebra: it never fabricates evidence, and it stays visible in the projection. A route override can change the engagement class and the explorer decision, never the risk signal.",
   input: {
     type: "object",
     properties: {
-      action: { type: "string", enum: ["read", "initialize", "transition", "guard"] },
+      action: { type: "string", enum: ["read", "initialize", "transition", "guard", "waive", "route"] },
       outcome: { type: "string" },
       actors: { type: "array", items: { type: "string" } },
       constraints: { type: "array", items: { type: "string" } },
@@ -25,6 +25,9 @@ export const AGENT_TEAM_STATE_TOOL = {
       to: { type: "string" },
       reason: { type: "string" },
       nextAction: { type: "string" },
+      target: { type: "string" },
+      engagementClass: { type: "string", enum: ["fix", "change", "decision"] },
+      namesFileAndSymptom: { type: "boolean" },
       status: {
         type: "string",
         enum: [
@@ -109,6 +112,56 @@ export async function executeState(runtime: AgentTeamRuntime, rawInput: unknown,
         : "Matching actions now require explicit authorization.",
       revision: next.revision,
     });
+  }
+
+  if (input.action === "waive") {
+    // The waiver binds to something that exists: a declared criterion or a
+    // recorded assumption. A target nobody can find in the ledger is a typo,
+    // not a relaxation.
+    const delivery = current.activeDelivery;
+    const isCriterion = delivery !== undefined && delivery.acceptanceCriteria.includes(input.target);
+    const isAssumption = current.assumptions.some((a) => a.id === input.target);
+    if (!isCriterion && !isAssumption) {
+      throw new Error(
+        `unknown waiver target ${input.target}; declare a criterion (${(delivery?.acceptanceCriteria ?? []).join(", ") || "no active delivery"}) or an assumption id (${current.assumptions.map((a) => a.id).join(", ") || "none"})`,
+      );
+    }
+    if (current.waivers.some((w) => w.target === input.target)) {
+      throw new Error(`${input.target} is already waived; re-waiving changes nothing`);
+    }
+    const next = await appendEvent(ctx, "waiver.recorded", { target: input.target, reason: input.reason }, (s) => ({
+      ...s,
+      waivers: [
+        ...s.waivers,
+        {
+          id: `WVR-${String(s.waivers.length + 1).padStart(4, "0")}`,
+          target: input.target,
+          reason: input.reason,
+          waivedAt: new Date().toISOString(),
+          actor: ctx.actor,
+        },
+      ],
+    }));
+    return toolOk({ id: next.waivers[next.waivers.length - 1]!.id, target: input.target, count: next.waivers.length, revision: next.revision });
+  }
+
+  if (input.action === "route") {
+    const prev = current.route;
+    // riskSignal is not overridable: it only adds a security lens, and a
+    // leader that could clear it could skip the lens instead of the noise.
+    const next = await appendEvent(ctx, "route.overridden", { engagementClass: input.engagementClass, namesFileAndSymptom: input.namesFileAndSymptom, reason: input.reason }, (s) => ({
+      ...s,
+      route: {
+        engagementClass: input.engagementClass ?? prev?.engagementClass ?? s.engagementClass ?? "change",
+        namesFileAndSymptom: input.namesFileAndSymptom ?? prev?.namesFileAndSymptom ?? false,
+        riskSignal: prev?.riskSignal ?? false,
+        overridden: true,
+        ...(prev?.model ? { model: prev.model } : {}),
+        reason: `overridden: ${input.reason}`,
+      },
+      ...(input.engagementClass ? { engagementClass: input.engagementClass } : {}),
+    }));
+    return toolOk({ route: next.route, revision: next.revision });
   }
 
   // transition

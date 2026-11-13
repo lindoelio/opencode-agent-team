@@ -1,7 +1,7 @@
 import { AgentTeamProjectStateSchema, type AgentTeamProjectStateV2 } from "../domain/schemas.js";
 
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 export function needsMigration(schemaVersion: number): boolean {
   return schemaVersion !== CURRENT_SCHEMA_VERSION;
@@ -72,10 +72,43 @@ function migrateDelivery(raw: unknown): unknown {
 export function migrateUnknown(state: unknown): unknown {
   const s = state as { schemaVersion?: number };
   if (!s || typeof s !== "object") throw new Error("unknown state layout");
-  if (s.schemaVersion === 3) return state;
-  if (s.schemaVersion === 2) return migrateV2toV3(state);
-  if (s.schemaVersion === 1) return migrateV2toV3(migrateV1toV2(state));
+  if (s.schemaVersion === CURRENT_SCHEMA_VERSION) return state;
+  if (s.schemaVersion === 3) return migrateV3toV4(state);
+  if (s.schemaVersion === 2) return migrateV3toV4(migrateV2toV3(state));
+  if (s.schemaVersion === 1) return migrateV3toV4(migrateV2toV3(migrateV1toV2(state)));
   throw new Error(`unsupported state schema: ${String(s.schemaVersion)} (backup required before upgrade)`);
+}
+
+/**
+ * Forward-only migration. v3 → v4 pairs every validation step with the
+ * criterion it proves and adds the waiver list.
+ *
+ * v3 recorded steps as plain commands and paired them with criteria by
+ * position (the last criterion absorbing the surplus). That rule was load
+ * bearing and invisible — every prompt surface, including this migration,
+ * had to guess it. v4 makes the pairing explicit: the old positional rule is
+ * applied once, here, so an in-flight delivery keeps exactly the checks the
+ * leader declared. It does not promote a waiver: there was no waiver path
+ * before, and inventing one would relax an engagement nobody relaxed.
+ */
+export function migrateV3toV4(state: unknown): AgentTeamProjectStateV2 {
+  const s = asRecord(state);
+  const delivery = s["activeDelivery"] !== undefined ? asRecord(s["activeDelivery"]) : undefined;
+  const criteria = stringList(delivery?.["acceptanceCriteria"]);
+  const rawSteps = delivery !== undefined && Array.isArray(delivery["validationSteps"]) ? delivery["validationSteps"] : [];
+  const validationSteps = rawSteps.map((step, index) => {
+    if (typeof step === "string") {
+      return { criterionId: criteria[Math.min(index, criteria.length - 1)] ?? "", command: step };
+    }
+    return step;
+  });
+  const migrated: Record<string, unknown> = {
+    ...s,
+    schemaVersion: 4,
+    waivers: Array.isArray(s["waivers"]) ? s["waivers"] : [],
+    ...(delivery ? { activeDelivery: { ...delivery, validationSteps } } : {}),
+  };
+  return AgentTeamProjectStateSchema.parse(migrated);
 }
 
 /**
@@ -83,7 +116,7 @@ export function migrateUnknown(state: unknown): unknown {
  * observation flag. It does not promote a prior `pass`: an unobserved row
  * stays unobserved, and the gate refuses it.
  */
-export function migrateV2toV3(state: unknown): AgentTeamProjectStateV2 {
+export function migrateV2toV3(state: unknown): MigratedV2State {
   const s = asRecord(state);
   const evidence = Array.isArray(s["evidence"])
     ? s["evidence"].map((raw) => {
@@ -104,7 +137,8 @@ export function migrateV2toV3(state: unknown): AgentTeamProjectStateV2 {
     evidence,
     handoffs,
   };
-  return AgentTeamProjectStateSchema.parse(migrated);
+  // This is an intermediate shape; `migrateV3toV4` validates the final one.
+  return migrated as unknown as MigratedV2State;
 }
 
 export type MigratedV2State = Omit<AgentTeamProjectStateV2, "schemaVersion"> & { schemaVersion: 2 };

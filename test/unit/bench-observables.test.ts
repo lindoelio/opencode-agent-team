@@ -18,7 +18,7 @@ function obs(partial: Partial<BenchObservation>): BenchObservation {
 }
 
 const FULL_LEDGER = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   engagement: { phase: "ACCEPT", status: "ACCEPTED" },
   assumptions: [{ basis: "VERIFIED", statement: "a" }, { basis: "INFERENCE", statement: "b" }],
   decisions: [{ id: "DEC-0001", options: [{}, {}] }],
@@ -29,7 +29,7 @@ const FULL_LEDGER = {
     allowedScope: ["src/**"],
     prohibitedScope: [],
     acceptanceCriteria: ["AC-1"],
-    validationSteps: ["npm test"],
+    validationSteps: [{ criterionId: "AC-1", command: "npm test" }],
     proof: [],
     rollback: "revert",
   },
@@ -60,7 +60,6 @@ describe("bench observables", () => {
     expect(INVARIANT_CHECKERS["criteria_linked_evidence"]!(o)).toBe(true);
     expect(INVARIANT_CHECKERS["accept_gate_passed"]!(o)).toBe(true);
     expect(INVARIANT_CHECKERS["delegates_to_specialists"]!(o)).toBe(true);
-    expect(INVARIANT_CHECKERS["skills_loaded_before_acting"]!(o)).toBe(true);
     expect(INVARIANT_CHECKERS["handoff_assigns_skills"]!(o)).toBe(true);
     expect(INVARIANT_CHECKERS["secret_boundary_respected"]!(o)).toBe(true);
     expect(INVARIANT_CHECKERS["proceeds_without_authorization_prompt"]!(o)).toBe(true);
@@ -147,6 +146,38 @@ describe("bench observables", () => {
       trace: { ...emptyObservation().trace, subagents: [{ agent: "a", description: "" }, { agent: "b", description: "" }] },
     });
     expect(observedParallelism(untimed.trace)).toBe(false);
+  });
+
+  it("measures parallelism from the ledger wave when the host trace has none", () => {
+    // The wave API books specialists without going through the host's
+    // subagent tool, so a correct run can have an empty trace and still have
+    // booked two units together. The ledger is the primary evidence.
+    const waved = obs({
+      ledger: {
+        ...FULL_LEDGER,
+        handoffs: [
+          { id: "HND-0001", role: "coder", status: "completed", skills: ["agent-team-delivery-execution"], dependsOn: [], wave: "WV-001" },
+          { id: "HND-0002", role: "worker", status: "completed", skills: ["agent-team-general-execution"], dependsOn: [], wave: "WV-001" },
+        ],
+      },
+      trace: emptyObservation().trace,
+    });
+    expect(INVARIANT_CHECKERS["independent_units_run_in_parallel"]!(waved)).toBe(true);
+    expect(INVARIANT_CHECKERS["delegates_to_specialists"]!(waved)).toBe(true);
+    // One unit per wave is a queue, not a wave.
+    const queued = obs({
+      ledger: {
+        ...FULL_LEDGER,
+        handoffs: [
+          { id: "HND-0001", role: "coder", status: "completed", skills: [], dependsOn: [], wave: "WV-001" },
+          { id: "HND-0002", role: "worker", status: "completed", skills: [], dependsOn: [], wave: "WV-002" },
+        ],
+      },
+      trace: emptyObservation().trace,
+    });
+    expect(INVARIANT_CHECKERS["independent_units_run_in_parallel"]!(queued)).toBe(false);
+    // Delegation is still visible from the ledger alone.
+    expect(INVARIANT_CHECKERS["delegates_to_specialists"]!(queued)).toBe(true);
   });
 
   it("collects the artifacts of the run", () => {

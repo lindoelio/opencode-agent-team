@@ -95,6 +95,15 @@ export const ProofSchema = z.object({
 });
 export type Proof = z.infer<typeof ProofSchema>;
 
+/** One declared check, bound to the criterion it is supposed to prove. */
+export const ValidationStepSchema = z
+  .object({
+    criterionId: z.string().min(1),
+    command: z.string().min(1),
+  })
+  .strict();
+export type ValidationStep = z.infer<typeof ValidationStepSchema>;
+
 export const DeliveryRefSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -113,8 +122,11 @@ export const DeliveryRefSchema = z.object({
    * Absence means any observed non-judgment kind may satisfy it.
    */
   criterionKinds: z.record(z.string(), z.enum(["test", "runtime", "visual", "source", "review", "release", "document", "metric"])).optional(),
-  /** How the delivery is checked: commands, checks, calls, human sign-offs. */
-  validationSteps: z.array(z.string()),
+  /**
+   * How the delivery is checked, each step bound to the criterion it proves.
+   * A criterion without its own step can never receive observed evidence.
+   */
+  validationSteps: z.array(ValidationStepSchema),
   /** The files in the allowed scope at registration, path to digest. */
   baselineFiles: z.record(z.string(), z.string()).optional(),
   proof: z.array(ProofSchema),
@@ -132,6 +144,25 @@ export const RiskRefSchema = z.object({
   mitigation: z.string().optional(),
 });
 export type RiskRef = z.infer<typeof RiskRefSchema>;
+
+/**
+ * A recorded, auditable relaxation of one gate requirement.
+ *
+ * A waiver is the only way a criterion that is still failing — or an
+ * assumption that is still low-confidence — stops blocking a gate. It never
+ * fabricates evidence: a waived criterion appears in the gate result's
+ * `waivers` list, never in its `satisfied` list, and it is visible in the
+ * projection.
+ */
+export const WaiverRefSchema = z.object({
+  id: z.string().min(1),
+  /** The criterion text or the assumption id (`ASM-####`) it relaxes. */
+  target: z.string().min(1),
+  reason: z.string().min(1),
+  waivedAt: z.string(),
+  actor: z.string(),
+});
+export type WaiverRef = z.infer<typeof WaiverRefSchema>;
 
 export const GateRefSchema = z.object({
   gate: z.enum(["INTENT", "DISCOVERY", "PLAN", "VERIFY", "REVIEW", "ACCEPT", "DELIVER"]),
@@ -245,6 +276,15 @@ export const HandoffRefSchema = z.object({
   status: z.enum(["prepared", "running", "completed", "failed", "cancelled"]),
   /** The child session launched for this booking. Scope and report bind to it. */
   sessionID: z.string().optional(),
+  /**
+   * The booking group this unit belongs to.
+   *
+   * One `agent_team_handoff` launch is one wave, and a wave is the unit of
+   * parallelism the method claims. Without the group, "did the leader book
+   * independent work together or one at a time" is only measurable from the
+   * host's subagent trace — which the wave API does not produce.
+   */
+  wave: z.string().optional(),
   /** The leader session that booked it, so a settle can notify it. */
   parentSessionID: z.string().optional(),
   result: z.unknown().optional(),
@@ -290,7 +330,7 @@ export const EngagementClassSchema = z.enum(["fix", "change", "decision"]);
 export type EngagementClass = z.infer<typeof EngagementClassSchema>;
 
 export const AgentTeamProjectStateSchema = z.object({
-  schemaVersion: z.literal(3),
+  schemaVersion: z.literal(4),
   revision: z.number().int().min(0),
   /** The path the engagement takes. Absence after migration means `change`. */
   engagementClass: EngagementClassSchema.optional(),
@@ -302,6 +342,8 @@ export const AgentTeamProjectStateSchema = z.object({
       riskSignal: z.boolean(),
       model: z.string().optional(),
       reason: z.string().optional(),
+      /** True once the leader overrode the route; an override is sticky within the engagement. */
+      overridden: z.boolean().optional(),
     })
     .optional(),
   project: z.object({
@@ -346,6 +388,7 @@ export const AgentTeamProjectStateSchema = z.object({
   gates: z.array(GateRefSchema),
   evidence: z.array(EvidenceRefSchema),
   approvals: z.array(ApprovalRefSchema),
+  waivers: z.array(WaiverRefSchema).default([]),
   handoffs: z.array(HandoffRefSchema),
   nextAction: z.object({
     description: z.string(),
@@ -413,7 +456,39 @@ export const StateGuardInput = z
     clear: z.boolean().optional(),
   })
   .strict();
-export const AgentTeamStateInputSchema = z.union([StateReadInput, StateInitInput, StateTransitionInput, StateGuardInput]);
+
+/**
+ * Records an auditable waiver for one criterion or assumption. A waiver is
+ * the only relaxation path in the gate algebra: it never fabricates
+ * evidence, and it stays visible in the projection and in every gate result
+ * that used it.
+ */
+export const StateWaiveInput = z
+  .object({
+    action: z.literal("waive"),
+    expectedRevision: z.number().int().min(0),
+    /** The criterion text or the assumption id (`ASM-####`). */
+    target: z.string().min(1),
+    reason: z.string().min(1),
+  })
+  .strict();
+
+/**
+ * Overrides the last route the decision model recorded. The override is
+ * sticky within the engagement: the router stops re-recording over it.
+ * `riskSignal` is deliberately not overridable: it only adds a security lens,
+ * and a leader that could clear it could skip the lens instead of the noise.
+ */
+export const StateRouteInput = z
+  .object({
+    action: z.literal("route"),
+    expectedRevision: z.number().int().min(0),
+    engagementClass: z.enum(["fix", "change", "decision"]).optional(),
+    namesFileAndSymptom: z.boolean().optional(),
+    reason: z.string().min(1),
+  })
+  .strict();
+export const AgentTeamStateInputSchema = z.union([StateReadInput, StateInitInput, StateTransitionInput, StateGuardInput, StateWaiveInput, StateRouteInput]);
 
 export const RecordAssumptionInputSchema = z
   .object({
@@ -459,7 +534,13 @@ export const DefineDeliveryInputSchema = z
     prohibitedScope: z.array(z.string()).optional(),
     acceptanceCriteria: z.array(z.string()).min(1),
     criterionKinds: z.record(z.string(), z.enum(["test", "runtime", "visual", "source", "review", "release", "document", "metric"])).optional(),
-    validationSteps: z.array(z.string()).min(1),
+    /**
+     * The checks that prove the criteria, each bound to one criterion by its
+     * id — never by position. Every criterion needs its own step: a step's
+     * command must start with an allowed check prefix, and the criterion it
+     * names must be declared.
+     */
+    validationSteps: z.array(ValidationStepSchema).min(1),
     proof: z.array(ProofSchema).optional(),
     risks: z.array(z.string()).optional(),
     rollback: z.string().min(1),

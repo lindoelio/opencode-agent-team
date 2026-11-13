@@ -37,13 +37,18 @@ interface HostModel {
 export async function discoverDecisionModels(ctx: AgentTeamContext): Promise<DecisionModelInfo[]> {
   let raw: unknown;
   try {
-    raw = await ctx.model.list();
+    // The host's model list defaults to chat models — the only type offered
+    // for sessions — so a decision model never appears without asking for the
+    // type explicitly. Newer host lines wrap the list in `{ data }`; older
+    // ones return the array directly.
+    raw = await ctx.model.list({ types: ["decision"] } as never);
   } catch {
     return [];
   }
-  if (!Array.isArray(raw)) return [];
+  const list = Array.isArray(raw) ? raw : (raw as { data?: unknown } | undefined)?.data;
+  if (!Array.isArray(list)) return [];
   const out: DecisionModelInfo[] = [];
-  for (const model of raw as HostModel[]) {
+  for (const model of list as HostModel[]) {
     if (model.type !== "decision") continue;
     const providerID = String(model.providerID ?? "");
     const id = String(model.modelID ?? model.id ?? "");

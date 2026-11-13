@@ -34,7 +34,14 @@ export async function executeGate(runtime: AgentTeamRuntime, rawInput: unknown, 
     return r?.findings ?? [];
   });
   const pendingApprovals = current.approvals.filter((a) => a.status === "pending").map((a) => a.id);
-  const highImpactLowConfidence = current.assumptions.some((a) => a.confidence === "low");
+  // A waiver is the only relaxation path: it never fabricates evidence, and
+  // it stays visible in the gate result's `waivers` list. User-recorded
+  // waivers (via agent_team_state waive) are the source; the domain's own
+  // waivers parameter exists so a gate can be evaluated against a crafted
+  // list in tests.
+  const waivedCriteria = current.waivers.filter((w) => criteria.includes(w.target)).map((w) => w.target);
+  const waivedTargets = new Set(current.waivers.map((w) => w.target));
+  const openLowConfidenceAssumptions = current.assumptions.some((a) => a.confidence === "low" && !waivedTargets.has(a.id));
   // A digest of the delivery contract as it stands. The ACCEPT gate records
   // it and the DELIVER gate compares it, so a delivery cannot be quietly
   // changed between being accepted and being promoted.
@@ -60,16 +67,14 @@ export async function executeGate(runtime: AgentTeamRuntime, rawInput: unknown, 
       evidence: current.evidence,
       findings: findings.map((f) => ({ severity: f.severity })),
       blockedBy: current.nextAction.blockedBy,
-      // `strictEvidence` is the only knob on evidence strength, and it never
-      // relaxes the proof requirement: it only decides whether a `partial`
-      // row carrying proof can satisfy a criterion.
-      acceptPartial: runtime.options.strictEvidence === false,
+      waivers: waivedCriteria,
       criterionKinds: current.activeDelivery?.criterionKinds,
       decisions: current.decisions,
     });
-    // High-impact low-confidence assumptions block ACCEPT until waived.
-    if (input.gate === "ACCEPT" && highImpactLowConfidence && result.result === "PASS") {
-      result = { ...result, result: "FAIL" as const, missing: [...result.missing, "open-assumptions"], nextAction: "Validate or explicitly waive low-confidence high-impact assumptions" };
+    // Unwaived low-confidence assumptions block ACCEPT until validated or
+    // explicitly waived; a waiver is recorded, auditable and visible.
+    if (input.gate === "ACCEPT" && openLowConfidenceAssumptions && result.result === "PASS") {
+      result = { ...result, result: "FAIL" as const, missing: [...result.missing, "open-assumptions"], nextAction: "Validate low-confidence high-impact assumptions, or record a waiver with agent_team_state action:\"waive\"" };
     }
   } else if (input.gate === "DELIVER") {
     const accept = [...current.gates].reverse().find((g) => g.gate === "ACCEPT");

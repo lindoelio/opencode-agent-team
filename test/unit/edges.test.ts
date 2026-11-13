@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathAllowed, pathInScope, pathProhibited, scopeOverlaps } from "../../src/domain/scope.js";
 import { evaluateAcceptGate, independentReviewCheck } from "../../src/domain/gates.js";
-import { kindMeets, evidenceSatisfiesCriterion } from "../../src/domain/evidence.js";
+import { kindMeets, evidenceSatisfiesCriterion, effectiveEvidence } from "../../src/domain/evidence.js";
 import { validatePhaseTransition, canTransitionStatus, statusForPhase } from "../../src/domain/state-machine.js";
 import { risksFromResult, validateResult } from "../../src/domain/handoff.js";
 import { parseOptions } from "../../src/options.js";
@@ -85,10 +85,31 @@ describe("the gate's claim and traceability checks", () => {
     expect(result.missing).toContain("traceable-decisions");
   });
 
-  it("accepts a partial row only when partial evidence is allowed", () => {
-    const partial = [{ ...evidence[0]!, status: "partial" as const }];
-    expect(evaluateAcceptGate({ criteria: ["AC-1"], evidence: partial, findings: [] }).result).toBe("FAIL");
-    expect(evaluateAcceptGate({ criteria: ["AC-1"], evidence: partial, findings: [], acceptPartial: true }).result).toBe("FAIL");
+  it("supersedes a failed observation with a later observed pass of the same check", () => {
+    const rows = [
+      { id: "E1", criterionId: "AC-1", kind: "test" as const, status: "fail" as const, summary: "red", command: "npm test", observedAt: "2026-01-01T00:00:00Z", observed: true, limitations: [] },
+      { id: "E2", criterionId: "AC-1", kind: "test" as const, status: "pass" as const, summary: "green", command: "npm test", observedAt: "2026-01-01T00:05:00Z", observed: true, limitations: [] },
+    ];
+    expect(effectiveEvidence(rows).map((e) => e.status)).toEqual(["pass"]);
+    expect(evaluateAcceptGate({ criteria: ["AC-1"], evidence: rows, findings: [] }).result).toBe("PASS");
+  });
+
+  it("never lets a typed row un-prove an observed pass", () => {
+    const rows = [
+      { id: "E1", criterionId: "AC-1", kind: "test" as const, status: "pass" as const, summary: "green", command: "npm test", observedAt: "2026-01-01T00:00:00Z", observed: true, limitations: [] },
+      { id: "E2", criterionId: "AC-1", kind: "test" as const, status: "fail" as const, summary: "typed doubt", command: "npm test", observedAt: "2026-01-01T00:05:00Z", limitations: [] },
+    ];
+    expect(effectiveEvidence(rows).map((e) => e.status)).toEqual(["pass"]);
+  });
+
+  it("relaxes a criterion only through a recorded waiver", () => {
+    const failed = [
+      { id: "E1", criterionId: "AC-1", kind: "test" as const, status: "fail" as const, summary: "red", command: "npm test", observedAt: "t", limitations: [] },
+    ];
+    const waived = evaluateAcceptGate({ criteria: ["AC-1"], evidence: failed, findings: [], waivers: ["AC-1"] });
+    expect(waived.result).toBe("PASS");
+    expect(waived.satisfied).toEqual([]);
+    expect(waived.waivers).toEqual(["AC-1"]);
   });
 
   it("blocks when a blocker is present and nothing has failed", () => {
@@ -161,7 +182,6 @@ describe("the option and catalog parsers", () => {
     const options = parseOptions({});
     expect(options.autonomy?.mode).toBe("yolo");
     expect(options.orchestration?.maxParallelSpecialists).toBe(6);
-    expect(options.strictEvidence).toBe(true);
   });
 
   it("derives a display name and falls back on a missing frontmatter", () => {

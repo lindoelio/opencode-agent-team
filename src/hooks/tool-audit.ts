@@ -2,8 +2,11 @@ import type { AgentTeamRuntime } from "../runtime.js";
 import { containsQuarantinedInstruction } from "./untrusted.js";
 import { readState } from "../ledger/store.js";
 import { projectRootOf } from "../runtime.js";
+import { allowedCheckPrefixes, isAllowedCheck } from "../domain/checks.js";
 import { normaliseRelativePath, pathAllowed, pathProhibited } from "../domain/scope.js";
-import { isAllowedCheck } from "../domain/checks.js";
+import { ancestorsOf, resolveAncestors, type SessionGetter } from "../orchestrator/lineage.js";
+import { observeDeclaredCheck } from "../orchestrator/observe.js";
+import type { AgentTeamProjectStateV2, HandoffRef } from "../domain/schemas.js";
 
 const failureCounts = new Map<string, number>();
 
@@ -26,6 +29,64 @@ function writtenPath(input: unknown): string | undefined {
   return undefined;
 }
 
+/** The text of a tool result's content, whether it arrived as a string or parts. */
+function contentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      const p = part as { type?: string; text?: string };
+      return p?.type === "text" && typeof p.text === "string" ? p.text : "";
+    })
+    .filter((text) => text.length > 0)
+    .join("\n");
+}
+
+/**
+ * The facts a completed shell tool call reports.
+ *
+ * This is the observation channel that does not depend on the host's event
+ * stream: the hook already sees the command the specialist asked to run and
+ * the result the host returned. The exit code is the host's, never the
+ * model's; a result without one is a failure, not a guessed pass.
+ */
+function shellFacts(event: { input?: unknown; result?: unknown }): { command: string; exitCode: number; output: string; cwd?: string } | undefined {
+  const input = (event.input ?? {}) as Record<string, unknown>;
+  const command = String(input["command"] ?? "");
+  if (command.length === 0) return undefined;
+  const result = (event.result ?? {}) as { output?: unknown; content?: unknown; metadata?: Record<string, unknown> };
+  const metadata = (result.metadata ?? {}) as Record<string, unknown>;
+  const exit = metadata["exit"] ?? metadata["exitCode"] ?? metadata["exit_code"] ?? metadata["code"];
+  const text = typeof result.output === "string" ? result.output : contentText(result.content);
+  let exitCode = typeof exit === "number" && Number.isFinite(exit) ? exit : Number.parseInt(String(exit ?? ""), 10);
+  if (!Number.isFinite(exitCode)) {
+    const match = text.match(/Exit code:\s*(-?\d+)/i);
+    exitCode = match ? Number.parseInt(match[1]!, 10) : 1;
+  }
+  const cwd = typeof input["workdir"] === "string" ? input["workdir"] : typeof input["cwd"] === "string" ? input["cwd"] : undefined;
+  return { command, exitCode, output: text, ...(cwd ? { cwd } : {}) };
+}
+
+/**
+ * The handoff a session descends from.
+ *
+ * A specialist's own session is booked directly. A built-in helper it
+ * launches runs under its own agent name, but descends from that session, so
+ * the handoff boundary has to travel with the lineage — otherwise the scope
+ * a specialist is forbidden to leave is one subagent call away.
+ */
+function handoffThroughLineage(state: AgentTeamProjectStateV2, sessionID: string): HandoffRef | undefined {
+  const running = (id: string): HandoffRef | undefined =>
+    state.handoffs.find((h) => h.sessionID === id && h.status === "running");
+  const direct = running(sessionID);
+  if (direct) return direct;
+  for (const ancestor of ancestorsOf(sessionID)) {
+    const inherited = running(ancestor);
+    if (inherited) return inherited;
+  }
+  return undefined;
+}
+
 /**
  * Checks a specialist's write against the scope of the handoff it was given.
  *
@@ -42,9 +103,11 @@ async function assertWithinHandoffScope(
   const root = projectRootOf(runtime.ctx);
   const state = await readState(root);
   if (!state) {
-    // A specialist cannot write product files without a ledger to prove the
-    // booking. The leader is allowed before an engagement exists.
-    if (agent !== "team-leader") throw new Error("Agent Team DENY: no engagement state, so no specialist booking can be proven.");
+    // No engagement exists, so there is no booking to violate: a specialist
+    // the person addressed directly writes inside the project like any other
+    // agent, and the integrity rules in the permission hook still apply. The
+    // strict rule below takes over the moment an engagement exists — that is
+    // when "no running booking" means an unbooked writer, not a direct one.
     return;
   }
   const relative = normaliseRelativePath(path.startsWith(root) ? path.slice(root.length).replace(/^\//, "") : path);
@@ -59,11 +122,16 @@ async function assertWithinHandoffScope(
     }
     return;
   }
-  const handoff = state.handoffs.find((h) => h.sessionID === sessionID && h.status === "running");
+  const handoff = handoffThroughLineage(state, sessionID);
   if (!handoff) {
-    throw new Error(
-      `Agent Team DENY: ${agent} has no running booking; product-file writes require a launched handoff.`,
-    );
+    if (agent.startsWith("team-leader/")) {
+      throw new Error(
+        `Agent Team DENY: ${agent} has no running booking; product-file writes require a launched handoff.`,
+      );
+    }
+    // A plain user session with no handoff lineage keeps its previous
+    // behavior: this hook only governs Agent Team work.
+    return;
   }
   if (!pathAllowed(relative, handoff.allowedScope)) {
     throw new Error(
@@ -104,7 +172,15 @@ export async function registerToolAuditHooks(runtime: AgentTeamRuntime): Promise
     // A specialist writes inside the scope of the handoff it was given.
     const agent = String(e.agent ?? "");
     const toolName = String(e.tool ?? "");
-    if (WRITE_TOOLS.has(toolName) && agent.startsWith("team-leader")) {
+    // A helper agent runs under its own name but descends from the specialist
+    // session that launched it: its writes are held to the same handoff. The
+    // event stream resolves the parent when it can; the lazy fallback asks
+    // the host once, so a host that never emits session.created still gets
+    // the boundary enforced.
+    const sessionGetter: SessionGetter = async (id) => runtime.ctx.session.get({ sessionID: id } as never);
+    const needsLineage = !agent.startsWith("team-leader") && (WRITE_TOOLS.has(toolName) || toolName === "shell");
+    const helperLineage = needsLineage ? await resolveAncestors(sessionGetter, sessionId) : [];
+    if (WRITE_TOOLS.has(toolName) && (agent.startsWith("team-leader") || helperLineage.length > 0)) {
       const path = writtenPath(e.input);
       if (path) await assertWithinHandoffScope(runtime, sessionId, agent, path);
     }
@@ -118,18 +194,44 @@ export async function registerToolAuditHooks(runtime: AgentTeamRuntime): Promise
         );
       }
     }
-    // A specialist shell can write anywhere. Only an allowlisted check runs.
+    // A specialist shell can write anywhere. Only an allowlisted check runs —
+    // and the refusal names the effective list instead of making the model
+    // rediscover it by trial and error.
     if (toolName === "shell" && agent.startsWith("team-leader/")) {
       const command = String((e.input as Record<string, unknown> | undefined)?.["command"] ?? "");
       if (!isAllowedCheck(command, runtime.options.orchestration?.allowedCheckPrefixes ?? [])) {
-        throw new Error("Agent Team DENY: a specialist shell is limited to an allowlisted check command.");
+        throw new Error(
+          `Agent Team DENY: a specialist shell is limited to an allowlisted check command. Allowed prefixes: ${allowedCheckPrefixes(runtime.options.orchestration?.allowedCheckPrefixes ?? []).join(", ")}.`,
+        );
+      }
+    }
+    // The same boundary holds for a helper a writing role launched.
+    if (toolName === "shell" && !agent.startsWith("team-leader") && helperLineage.length > 0) {
+      const state = await readState(projectRootOf(runtime.ctx));
+      if (state && handoffThroughLineage(state, sessionId)) {
+        const command = String((e.input as Record<string, unknown> | undefined)?.["command"] ?? "");
+        if (!isAllowedCheck(command, runtime.options.orchestration?.allowedCheckPrefixes ?? [])) {
+          throw new Error(
+            `Agent Team DENY: a helper of a booked specialist is limited to an allowlisted check command. Allowed prefixes: ${allowedCheckPrefixes(runtime.options.orchestration?.allowedCheckPrefixes ?? []).join(", ")}.`,
+          );
+        }
       }
     }
     if (e.id) startedAt.set(String(e.id), Date.now());
   });
   const after = await runtime.ctx.tool.hook("execute.after", async (event: any) => {
-    const e = event as unknown as { tool?: string; status?: string; id?: string; input?: unknown };
+    const e = event as unknown as { tool?: string; status?: string; id?: string; input?: unknown; agent?: string; result?: unknown };
     const toolName = String(e.tool ?? "unknown");
+    // A declared check that a specialist ran and completed is an observation.
+    // The hook sees both the command and the host's result, so evidence does
+    // not depend on the host exposing a shell surface or delivering the
+    // shell-ended event.
+    if (toolName === "shell" && e.status === "completed" && String(e.agent ?? "").startsWith("team-leader")) {
+      const facts = shellFacts(e);
+      if (facts) {
+        await observeDeclaredCheck(projectRootOf(runtime.ctx), facts, runtime.options.orchestration?.allowedCheckPrefixes ?? []).catch(() => {});
+      }
+    }
     const key = failureKey(toolName, e.input);
     if (e.status === "error") {
       const n = (failureCounts.get(key) ?? 0) + 1;

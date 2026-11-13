@@ -1,9 +1,10 @@
 import { SpecialistResultSchema } from "../domain/schemas.js";
 import { risksFromResult } from "../domain/handoff.js";
-import { appendEvent, readState, storeContext } from "../ledger/store.js";
+import { appendEvent, readState, storeContext, STATE_NOT_INITIALIZED } from "../ledger/store.js";
 import { projectRootOf, toolOk, type AgentTeamRuntime } from "../runtime.js";
 import { assertSupportedHost } from "../orchestrator/host-gate.js";
 import { observeDeliveryChecks } from "../orchestrator/observe.js";
+import { archiveSettledSession } from "../orchestrator/launch.js";
 import type { ToolContext } from "@opencode/plugin/promise/tool";
 
 export const REPORT_TOOL = {
@@ -18,7 +19,19 @@ export const REPORT_TOOL = {
         properties: {
           status: { type: "string", enum: ["PASS", "FAIL", "BLOCKED", "ADVISORY"] },
           summary: { type: "string" },
-          findings: { type: "array", items: { type: "object" } },
+          findings: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                severity: { type: "string", enum: ["critical", "high", "medium", "low", "note"] },
+                claim: { type: "string" },
+                evidence: { type: "array", items: { type: "string" } },
+              },
+              required: ["severity", "claim", "evidence"],
+              additionalProperties: false,
+            },
+          },
           risks: { type: "array", items: { type: "string" } },
           unknowns: { type: "array", items: { type: "string" } },
           recommended_next_action: { type: "string" },
@@ -43,16 +56,25 @@ export async function executeReport(runtime: AgentTeamRuntime, rawInput: unknown
 
   const projectRoot = projectRootOf(runtime.ctx);
   const state = await readState(projectRoot);
-  if (!state) throw new Error("agent-team state not initialized");
+  if (!state) throw new Error(STATE_NOT_INITIALIZED);
   const handoff = state.handoffs.find((h) => h.sessionID === sessionID && h.status === "running");
   if (!handoff) {
-    throw new Error("this session has no running handoff; a report is accepted only from the session that was launched for it");
+    throw new Error(
+      "this session has no running handoff; a report is recorded only from the session launched for one. A direct session has nothing to report to — answer in this session.",
+    );
   }
 
   const newRisks = risksFromResult(result, state.risks.length + 1);
+  // The session has settled, so archiving now sticks: the thread list drops
+  // the specialist the moment its report lands. Best-effort and verified; the
+  // outcome travels in the event so an operator can tell whether the host
+  // honoured it.
+  const archive = await archiveSettledSession(runtime, sessionID).catch(() => ({ status: "failed" as const, reason: "archive check failed" }));
   const next = await appendEvent(storeContext(projectRoot, "plugin", "plugin"), "handoff.reported", {
     id: handoff.id,
     status: result.status,
+    archive: archive.status,
+    ...(archive.reason ? { archiveReason: archive.reason } : {}),
   }, (s) => ({
     ...s,
     handoffs: s.handoffs.map((h) => (h.id === handoff.id ? { ...h, status: "completed" as const, result } : h)),

@@ -43,7 +43,7 @@ function mockCtx(): { ctx: never; calls: Record<string, number> } {
 describe("plugin registration contracts", () => {
   it("registers the agent-team tools, 3 commands and 18 skills without throwing", async () => {
     const { ctx } = mockCtx();
-    const runtime = createRuntime(ctx as never, { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false } as never);
+    const runtime = createRuntime(ctx as never, { profile: "public", projectState: ".agent-team", telemetry: false } as never);
     const addedTools: string[] = [];
     const toolExecutes: Array<(input: unknown, tool: unknown) => Promise<unknown>> = [];
     const toolEditor = {
@@ -145,6 +145,26 @@ describe("plugin registration contracts", () => {
     const { WorkStatusSchema } = await import("../../src/domain/schemas.js");
     const status = AGENT_TEAM_STATE_TOOL.input.properties["status"] as { enum: readonly string[] };
     expect(status.enum).toEqual([...WorkStatusSchema.options]);
+    // The state tool declares every action its handler accepts: a verb the
+    // schema omits is unreachable through a host that validates inputs.
+    const stateAction = AGENT_TEAM_STATE_TOOL.input.properties["action"] as { enum: readonly string[] };
+    expect(stateAction.enum).toEqual(["read", "initialize", "transition", "guard", "waive", "route"]);
+    // The delivery's validation steps are bound to a criterion, never paired
+    // by position: the declared schema requires both halves of the pair.
+    const step = DELIVERY_TOOL.input.properties["validationSteps"] as {
+      items: { required: readonly string[]; properties: Record<string, unknown> };
+    };
+    expect(step.items.required).toEqual(["criterionId", "command"]);
+    // The report's findings carry the canonical severity enum, so a host
+    // that validates inputs never accepts a severity the plugin does not
+    // understand.
+    const { SpecialistResultSchema } = await import("../../src/domain/schemas.js");
+    const report = REPORT_TOOL.input.properties["result"] as {
+      properties: { findings: { items: { properties: { severity: { enum: readonly string[] } } } } };
+    };
+    expect(report.properties.findings.items.properties.severity.enum).toEqual([
+      ...SpecialistResultSchema.shape.findings.element.shape.severity.options,
+    ]);
     // The evidence kind enum is declared in three places; a missed literal
     // would only fail at the host's schema layer, so it is pinned here.
     const { EvidenceRefSchema } = await import("../../src/domain/schemas.js");

@@ -81,6 +81,21 @@ export function skillsForSpecialist(role: string): readonly SkillId[] {
   return ROLE_SKILLS[`team-leader/${role}`] ?? [];
 }
 
+/**
+ * The body of one shipped skill, or an empty string when there is none.
+ *
+ * One reader for the only surface that embeds a procedure — the child prompt
+ * of a booked specialist — so what the handoff declares and what the
+ * specialist receives cannot disagree.
+ */
+export function loadSkillBody(id: string): string {
+  try {
+    return fs.readFileSync(path.join(packageRoot(), "assets", "skills", id, "SKILL.md"), "utf8").slice(0, 6000);
+  } catch {
+    return "";
+  }
+}
+
 /** Injected into the role's system prompt so skill awareness is deterministic, not remembered. */
 export function roleSkillsBlock(role: string): string {
   const skills = skillsForRole(role);

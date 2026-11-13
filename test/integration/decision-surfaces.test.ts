@@ -47,7 +47,6 @@ async function fresh(decisionModels: unknown[], surface = true): Promise<{ runti
   const cap: Captured = { sessionHooks: {} };
   const runtime = createRuntime(mockCtx(root, cap, decisionModels, surface), {
     profile: "public",
-    strictEvidence: true,
     projectState: ".agent-team",
     telemetry: false,
     autonomy: { mode: "yolo", askBefore: [] },

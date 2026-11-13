@@ -1,6 +1,6 @@
 import type { AgentTeamRuntime } from "../runtime.js";
 import { projectRootOf } from "../runtime.js";
-import { readState, storeContext, type StoreContext } from "../ledger/store.js";
+import { readState, storeContext, STATE_NOT_INITIALIZED, type StoreContext } from "../ledger/store.js";
 import type { AgentTeamProjectStateV2 } from "../domain/schemas.js";
 import { assertLedgerOwner } from "./authority.js";
 import { assertSupportedHost } from "../orchestrator/host-gate.js";
@@ -30,7 +30,7 @@ export async function openLedger(
   assertLedgerOwner(tool, what);
   const projectRoot = projectRootOf(runtime.ctx);
   const current = await readState(projectRoot);
-  if (!current) throw new Error("agent-team state not initialized");
+  if (!current) throw new Error(STATE_NOT_INITIALIZED);
   if (expectedRevision !== current.revision) {
     throw new Error(`stale revision: expected ${expectedRevision}, actual ${current.revision}`);
   }

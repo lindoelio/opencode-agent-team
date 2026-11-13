@@ -48,7 +48,6 @@ function runtimeFor(root: string, overrides: Record<string, unknown> = {}): Agen
     } as never,
     {
       profile: "public",
-      strictEvidence: true,
       projectState: ".agent-team",
       telemetry: false,
       autonomy: { mode: "yolo", askBefore: [] },
@@ -154,7 +153,7 @@ describe("observe edge cases", () => {
   it("does nothing when the host has no shell", async () => {
     const { runtime, root } = await fresh({ session: { create: async () => ({ id: "ses_x" }), prompt: async () => ({}) } });
     await executeState(runtime, { action: "initialize", outcome: "O" }, leader);
-    await executeDelivery(runtime, { expectedRevision: 0, title: "T", userOutcome: "U", happyPath: ["h"], allowedScope: ["src/**"], acceptanceCriteria: ["AC-1"], validationSteps: ["npm test"], rollback: "revert" }, leader);
+    await executeDelivery(runtime, { expectedRevision: 0, title: "T", userOutcome: "U", happyPath: ["h"], allowedScope: ["src/**"], acceptanceCriteria: ["AC-1"], validationSteps: [{ criterionId: "AC-1", command: "npm test" }], rollback: "revert" }, leader);
     const delivery = (await readState(root))!.activeDelivery!;
     expect(await observeDeliveryChecks(runtime, root, delivery)).toBe(0);
   });
@@ -162,7 +161,7 @@ describe("observe edge cases", () => {
   it("records a thrown shell call as a fail row", async () => {
     const { runtime, root } = await fresh({ session: { create: async () => ({ id: "ses_x" }), prompt: async () => ({}), shell: async () => { throw new Error("shell down"); } } });
     await executeState(runtime, { action: "initialize", outcome: "O" }, leader);
-    await executeDelivery(runtime, { expectedRevision: 0, title: "T", userOutcome: "U", happyPath: ["h"], allowedScope: ["src/**"], acceptanceCriteria: ["AC-1"], validationSteps: ["npm test"], rollback: "revert" }, leader);
+    await executeDelivery(runtime, { expectedRevision: 0, title: "T", userOutcome: "U", happyPath: ["h"], allowedScope: ["src/**"], acceptanceCriteria: ["AC-1"], validationSteps: [{ criterionId: "AC-1", command: "npm test" }], rollback: "revert" }, leader);
     const delivery = (await readState(root))!.activeDelivery!;
     expect(await observeDeliveryChecks(runtime, root, delivery)).toBe(1);
     expect((await readState(root))!.evidence[0]?.status).toBe("fail");
@@ -171,7 +170,7 @@ describe("observe edge cases", () => {
   it("records a failing exit code as a fail row", async () => {
     const { runtime, root } = await fresh({ session: { create: async () => ({ id: "ses_x" }), prompt: async () => ({}), shell: async () => ({ exitCode: 2, output: "boom" }) } });
     await executeState(runtime, { action: "initialize", outcome: "O" }, leader);
-    await executeDelivery(runtime, { expectedRevision: 0, title: "T", userOutcome: "U", happyPath: ["h"], allowedScope: ["src/**"], acceptanceCriteria: ["AC-1"], validationSteps: ["npm test"], rollback: "revert" }, leader);
+    await executeDelivery(runtime, { expectedRevision: 0, title: "T", userOutcome: "U", happyPath: ["h"], allowedScope: ["src/**"], acceptanceCriteria: ["AC-1"], validationSteps: [{ criterionId: "AC-1", command: "npm test" }], rollback: "revert" }, leader);
     const delivery = (await readState(root))!.activeDelivery!;
     expect(await observeDeliveryChecks(runtime, root, delivery)).toBe(1);
     expect((await readState(root))!.evidence[0]?.status).toBe("fail");
@@ -184,7 +183,7 @@ describe("report edge cases", () => {
   it("runs the declared checks when a coder reports", async () => {
     const { runtime, root } = await fresh({ session: { create: async () => ({ id: "ses_coder" }), prompt: async () => ({}), synthetic: async () => ({}), shell: async () => ({ exitCode: 0, output: "ok" }) } });
     await executeState(runtime, { action: "initialize", outcome: "O" }, leader);
-    await executeDelivery(runtime, { expectedRevision: 0, title: "T", userOutcome: "U", happyPath: ["h"], allowedScope: ["src/**"], acceptanceCriteria: ["AC-1"], validationSteps: ["npm test"], rollback: "revert" }, leader);
+    await executeDelivery(runtime, { expectedRevision: 0, title: "T", userOutcome: "U", happyPath: ["h"], allowedScope: ["src/**"], acceptanceCriteria: ["AC-1"], validationSteps: [{ criterionId: "AC-1", command: "npm test" }], rollback: "revert" }, leader);
     const out = JSON.parse((await executeHandoff(runtime, {
       action: "launch",
       expectedRevision: 1,
@@ -260,7 +259,7 @@ describe("permission and audit edge cases", () => {
       session: { create: async () => ({ id: "ses_x" }), prompt: async () => ({}) },
       permission: { hook: async (_name: string, cb: (e: unknown) => unknown) => { captured.permission = cb; return { dispose: async () => {} }; } },
     } as never, {
-      profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false,
+      profile: "public", projectState: ".agent-team", telemetry: false,
       autonomy: { mode: "yolo", askBefore: [], allowPromotion: true },
       orchestration: { maxParallelSpecialists: 6, allowedCheckPrefixes: [] },
     } as never);
@@ -276,7 +275,7 @@ describe("permission and audit edge cases", () => {
   it("denies leader shell while a delivery is active and records a repeated failure route", async () => {
     const { runtime, root } = await fresh();
     await executeState(runtime, { action: "initialize", outcome: "O" }, leader);
-    await executeDelivery(runtime, { expectedRevision: 0, title: "T", userOutcome: "U", happyPath: ["h"], allowedScope: ["src/**"], acceptanceCriteria: ["AC-1"], validationSteps: ["npm test"], rollback: "revert" }, leader);
+    await executeDelivery(runtime, { expectedRevision: 0, title: "T", userOutcome: "U", happyPath: ["h"], allowedScope: ["src/**"], acceptanceCriteria: ["AC-1"], validationSteps: [{ criterionId: "AC-1", command: "npm test" }], rollback: "revert" }, leader);
     await registerToolAuditHooks(runtime);
     await expect(captured.before!({ tool: "shell", agent: "team-leader", sessionID: "sess-1", input: { command: "rm -rf src" } })).rejects.toThrow(/cannot run shell/);
     _resetFailureCountsForTests();

@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { appendEvent, readState, storeContext } from "../ledger/store.js";
 import { evidenceId } from "../util/ids.js";
 import { sha256Hex } from "../util/hash.js";
@@ -50,6 +51,51 @@ export async function recordObservedEvidence(projectRoot: string, check: Observe
 }
 
 /**
+ * Records an observed result for a declared check the host reported.
+ *
+ * This is the observation path for a host that exposes no shell surface to the
+ * plugin: the specialist runs the declared command with its own shell — which
+ * the tool audit limits to the allowlist — and the host reports the command,
+ * the exit code and the output. Two controls keep it honest: the command must
+ * match a declared step exactly, and the shell must have run inside this
+ * project. A prior observed pass is not re-recorded; a prior failure is, so a
+ * fixed check supersedes it.
+ */
+export async function observeDeclaredCheck(
+  projectRoot: string,
+  facts: { command: string; exitCode: number; output: string; cwd?: string },
+  extraPrefixes: string[] = [],
+): Promise<number> {
+  const state = await readState(projectRoot);
+  const delivery = state?.activeDelivery;
+  if (!state || !delivery) return 0;
+  if (facts.cwd) {
+    const root = path.resolve(projectRoot);
+    const cwd = path.resolve(facts.cwd);
+    if (cwd !== root && !cwd.startsWith(`${root}${path.sep}`)) return 0;
+  }
+  const wanted = facts.command.trim();
+  const matches = delivery.validationSteps.filter((step) => step.command.trim() === wanted && isAllowedCheck(step.command, extraPrefixes));
+  let recorded = 0;
+  for (const step of matches) {
+    const already = state.evidence.some(
+      (e) => e.criterionId === step.criterionId && e.command === step.command && e.observed === true && e.status === "pass",
+    );
+    if (already) continue;
+    await recordObservedEvidence(projectRoot, {
+      criterionId: step.criterionId,
+      kind: delivery.criterionKinds?.[step.criterionId] ?? "test",
+      summary: `${step.command} exited ${facts.exitCode}`,
+      command: step.command,
+      exitCode: facts.exitCode,
+      output: facts.output,
+    });
+    recorded += 1;
+  }
+  return recorded;
+}
+
+/**
  * Runs every declared validation step through the host.
  *
  * A step is skipped when it is not on the allowlist or when an observed pass
@@ -66,17 +112,17 @@ export async function observeDeliveryChecks(
   if (!state) return 0;
   const extra = runtime.options.orchestration?.allowedCheckPrefixes ?? [];
   let recorded = 0;
-  for (const [index, step] of delivery.validationSteps.entries()) {
-    if (!isAllowedCheck(step, extra)) continue;
-    // Pair each step with a criterion by position. Using the first criterion
-    // for every step made a multi-criterion delivery impossible to satisfy.
-    const criterion = delivery.acceptanceCriteria[Math.min(index, delivery.acceptanceCriteria.length - 1)];
-    if (!criterion) continue;
-    const already = state.evidence.some((e) => e.criterionId === criterion && e.command === step && e.observed === true && e.status === "pass");
+  for (const step of delivery.validationSteps) {
+    if (!isAllowedCheck(step.command, extra)) continue;
+    // The step names the criterion it proves. The old positional pairing
+    // disappeared with the schema: a criterion the leader did not bind is
+    // simply never observed, exactly as the registration note told them.
+    const criterion = step.criterionId;
+    const already = state.evidence.some((e) => e.criterionId === criterion && e.command === step.command && e.observed === true && e.status === "pass");
     if (already) continue;
     let outcome: { exitCode: number; output: string };
     try {
-      const ran = await runHostShell(runtime, { sessionID, command: step, cwd: projectRoot });
+      const ran = await runHostShell(runtime, { sessionID, command: step.command, cwd: projectRoot });
       if (!ran) return 0;
       outcome = ran;
     } catch (err) {
@@ -85,8 +131,8 @@ export async function observeDeliveryChecks(
     await recordObservedEvidence(projectRoot, {
       criterionId: criterion,
       kind: delivery.criterionKinds?.[criterion] ?? "test",
-      summary: `${step} exited ${outcome.exitCode}`,
-      command: step,
+      summary: `${step.command} exited ${outcome.exitCode}`,
+      command: step.command,
       exitCode: outcome.exitCode,
       output: outcome.output,
     });

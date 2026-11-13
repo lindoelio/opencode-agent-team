@@ -40,3 +40,34 @@ export function evidenceSatisfiesCriterion(e: EvidenceRef, required?: EvidenceKi
   if (!e.artifactRef && !e.command && !e.digest) return false;
   return required ? kindMeets(e.kind, required) : true;
 }
+
+/**
+ * The rows the gate and projection algebra may read.
+ *
+ * A failed run of a check is an observation of that check at a point in time,
+ * not a property of the criterion forever. Without this filter, one failed
+ * run poisons the criterion even after a later observed pass of the same
+ * command proves it — and a delivery that was fixed could never recover. The
+ * effective set keeps, per (criterion, command), the newest row, with one
+ * exception: an observed pass outranks any later unobserved row, because a
+ * plugin-recorded observation cannot be un-proven by a typed claim. Rows
+ * without a command (typed fail/partial submissions) are never superseded by
+ * observation — only a recorded waiver relaxes them.
+ */
+export function effectiveEvidence(evidence: readonly EvidenceRef[]): EvidenceRef[] {
+  const latest = new Map<string, EvidenceRef>();
+  for (const row of evidence) {
+    const key = `${row.criterionId}\u0000${row.command ?? ""}`;
+    const current = latest.get(key);
+    if (!current) {
+      latest.set(key, row);
+      continue;
+    }
+    if (row.observedAt < current.observedAt) continue;
+    // An observed row is stronger than a typed one: a later typed claim never
+    // un-proves an observed pass (or an observed fail).
+    if (current.observed === true && row.observed !== true) continue;
+    latest.set(key, row);
+  }
+  return [...latest.values()];
+}

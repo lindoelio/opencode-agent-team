@@ -43,7 +43,7 @@ function runtimeFor(root: string, options: HostOptions = {}, decisionMode?: "off
     },
     experimental: { generate: { decisions } },
   } as never;
-  const base = { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false, autonomy: { mode: "yolo", askBefore: [] }, orchestration: { maxParallelSpecialists: 6 } };
+  const base = { profile: "public", projectState: ".agent-team", telemetry: false, autonomy: { mode: "yolo", askBefore: [] }, orchestration: { maxParallelSpecialists: 6 } };
   const decision = { mode: decisionMode ?? "auto", ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}) };
   const options_ = { ...base, decision };
   return createRuntime(ctx, options_ as never);
@@ -61,7 +61,7 @@ async function projectWithDelivery(runtime: AgentTeamRuntime): Promise<string> {
       happyPath: ["one thin flow"],
       allowedScope: ["src"],
       acceptanceCriteria: ["criterion-one"],
-      validationSteps: ["npm test"],
+      validationSteps: [{ criterionId: "criterion-one", command: "npm test" }],
       rollback: "revert",
     },
     tool,
@@ -201,7 +201,6 @@ describe("a pinned decision model", () => {
     } as never;
     const runtime = createRuntime(ctx, {
       profile: "public",
-      strictEvidence: true,
       projectState: ".agent-team",
       telemetry: false,
       autonomy: { mode: "yolo", askBefore: [] },
@@ -257,7 +256,6 @@ describe("the unavailable behaviour", () => {
     } as never;
     const runtime = createRuntime(ctx, {
       profile: "public",
-      strictEvidence: true,
       projectState: ".agent-team",
       telemetry: false,
       autonomy: { mode: "yolo", askBefore: [] },

@@ -28,6 +28,11 @@ export function handoffId(n: number): string {
   return `HND-${String(n).padStart(4, "0")}`;
 }
 
+/** The booking group one `agent_team_handoff` launch created. */
+export function waveId(n: number): string {
+  return `WV-${String(n).padStart(3, "0")}`;
+}
+
 /**
  * A decision identifier.
  *

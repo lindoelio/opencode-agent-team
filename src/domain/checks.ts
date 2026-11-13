@@ -13,6 +13,7 @@ export const VALIDATION_SAFE_PREFIXES = [
   "npm run build",
   "npx tsc",
   "npx vitest",
+  "node --test",
   "pnpm test",
   "pnpm run test",
   "yarn test",

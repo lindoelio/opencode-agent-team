@@ -62,7 +62,8 @@
     "compat:check": "npx tsx scripts/compat-check.ts",
     "pack:check": "npm pack --dry-run",
     "verify": "npm run typecheck && npm run test:coverage && npm run bench && npm run pack:check",
-    "bench:model": "AGENT_TEAM_BENCH=1 node --experimental-strip-types bench/runners/run.ts 2>/dev/null || AGENT_TEAM_BENCH=1 npx tsx bench/runners/run.ts"
+    "bench:model": "AGENT_TEAM_BENCH=1 node --experimental-strip-types bench/runners/run.ts 2>/dev/null || AGENT_TEAM_BENCH=1 npx tsx bench/runners/run.ts",
+    "sessions:archive": "npx tsx scripts/archive-child-sessions.ts"
   },
   "publishConfig": {
     "access": "public"

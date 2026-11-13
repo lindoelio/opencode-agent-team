@@ -3,13 +3,14 @@ import { appendEvent, writeDeliveryDoc  } from "../ledger/store.js";
 import { deliveryId } from "../util/ids.js";
 import { toolOk, type AgentTeamRuntime } from "../runtime.js";
 import { openLedger } from "./ledger.js";
-import { firstRefusedCheck } from "../domain/checks.js";
+import { allowedCheckPrefixes, firstRefusedCheck } from "../domain/checks.js";
 import { snapshotScope } from "../orchestrator/digest.js";
 import type { ToolContext } from "@opencode/plugin/promise/tool";
 
 export const DELIVERY_TOOL = {
   name: "define_delivery",
-  description: "Register the active Delivery Contract: scope, acceptance criteria, validation steps, proof and rollback. Exactly one delivery is active at a time",
+  description:
+    "Register the active Delivery Contract: scope, acceptance criteria, validation steps (each bound to the criterion it proves, by criterionId), proof and rollback. Exactly one delivery is active at a time. A validation step must start with an allowed check prefix (the refusal message lists the effective set); a criterion without its own step can never be satisfied by observed evidence.",
   input: {
     type: "object",
     properties: {
@@ -24,7 +25,20 @@ export const DELIVERY_TOOL = {
       prohibitedScope: { type: "array", items: { type: "string" } },
       acceptanceCriteria: { type: "array", items: { type: "string" } },
       criterionKinds: { type: "object", additionalProperties: { type: "string" } },
-      validationSteps: { type: "array", items: { type: "string" } },      proof: {
+      validationSteps: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            criterionId: { type: "string" },
+            command: { type: "string" },
+          },
+          required: ["criterionId", "command"],
+          additionalProperties: false,
+        },
+        minItems: 1,
+      },
+      proof: {
         type: "array",
         items: {
           type: "object",
@@ -52,10 +66,26 @@ export async function executeDelivery(runtime: AgentTeamRuntime, rawInput: unkno
   if (!parsed.success) throw new Error(`invalid delivery input: ${parsed.error.message}`);
   const input = parsed.data;
   const { projectRoot, current, ctx } = await openLedger(runtime, tool, input.expectedRevision, "define the active delivery");
-  const refused = firstRefusedCheck(input.validationSteps, runtime.options.orchestration?.allowedCheckPrefixes ?? []);
-  if (refused) {
-    throw new Error(`validation step is not on the accepted check list: ${refused}. Declare a check on the allowed prefixes, or add the prefix to orchestration.allowedCheckPrefixes.`);
+  const extra = runtime.options.orchestration?.allowedCheckPrefixes ?? [];
+  const prefixes = allowedCheckPrefixes(extra);
+  // Every step names a declared criterion, and every declared criterion has
+  // its own step: a step bound to nothing cannot be paired by position, and a
+  // criterion with no step can never be satisfied by observed evidence.
+  const criteria = input.acceptanceCriteria;
+  for (const step of input.validationSteps) {
+    if (!criteria.includes(step.criterionId)) {
+      throw new Error(
+        `validation step ${JSON.stringify(step.command)} declares unknown criterion ${JSON.stringify(step.criterionId)}; acceptance criteria are: ${criteria.join(", ")}`,
+      );
+    }
+    const refused = firstRefusedCheck([step.command], extra);
+    if (refused) {
+      throw new Error(
+        `validation step ${refused} is not on the accepted check list. Allowed prefixes: ${prefixes.join(", ")}. Extend via orchestration.allowedCheckPrefixes.`,
+      );
+    }
   }
+  const uncovered = criteria.filter((c) => !input.validationSteps.some((st) => st.criterionId === c));
   const baseline = snapshotScope(projectRoot, input.allowedScope);
   const id = deliveryId((current.activeDelivery ? Number(current.activeDelivery.id.split("-")[1] ?? "0") : 0) + 1);
   const record = {
@@ -63,14 +93,15 @@ export async function executeDelivery(runtime: AgentTeamRuntime, rawInput: unkno
     title: input.title,
     userOutcome: input.userOutcome,
     entryState: input.entryState ?? "",
-    happyPath: input.happyPath ?? [],
+    // Required by the input schema: no default to fake here.
+    happyPath: input.happyPath,
     inScope: input.inScope ?? [],
     outOfScope: input.outOfScope ?? [],
-    allowedScope: input.allowedScope ?? [],
+    allowedScope: input.allowedScope,
     prohibitedScope: input.prohibitedScope ?? [],
     acceptanceCriteria: input.acceptanceCriteria,
     ...(input.criterionKinds ? { criterionKinds: input.criterionKinds } : {}),
-    validationSteps: input.validationSteps ?? [],
+    validationSteps: input.validationSteps,
     baselineFiles: baseline.files,
     proof: input.proof ?? [],
     risks: input.risks ?? [],
@@ -83,7 +114,16 @@ export async function executeDelivery(runtime: AgentTeamRuntime, rawInput: unkno
     activeDelivery: record,
   }));
   await writeDeliveryDoc(projectRoot, id, renderDeliveryYaml(record));
-  return toolOk({ id, revision: next.revision });
+  // Unknown criteria in the old string form would have been silent. The note
+  // is not a lock: the delivery is registered, but the leader is told which
+  // criteria can never pass without their own check.
+  return toolOk({
+    id,
+    revision: next.revision,
+    ...(uncovered.length > 0
+      ? { note: `criteria without a declared check (they cannot receive observed evidence): ${uncovered.join(", ")}` }
+      : {}),
+  });
 }
 
 function renderDeliveryYaml(d: {
@@ -98,7 +138,7 @@ function renderDeliveryYaml(d: {
   prohibitedScope: string[];
   acceptanceCriteria: string[];
   criterionKinds?: Record<string, string>;
-  validationSteps: string[];
+  validationSteps: Array<{ criterionId: string; command: string }>;
   baselineFiles?: Record<string, string>;
   proof: Array<{ kind: string; claim: string; ref: string }>;
   risks: string[];
@@ -124,7 +164,7 @@ function renderDeliveryYaml(d: {
     `acceptance_criteria:`,
     ...d.acceptanceCriteria.map((h) => `  - ${JSON.stringify(h)}`),
     `validation_steps:`,
-    ...d.validationSteps.map((h) => `  - ${JSON.stringify(h)}`),
+    ...d.validationSteps.map((st) => `  - criterion: ${JSON.stringify(st.criterionId)}\n    command: ${JSON.stringify(st.command)}`),
     `proof:`,
     ...d.proof.map((p) => `  - kind: ${p.kind}\n    claim: ${JSON.stringify(p.claim)}\n    ref: ${JSON.stringify(p.ref)}`),
     `risks:`,

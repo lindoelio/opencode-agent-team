@@ -18,7 +18,7 @@ import { readState } from "../../src/ledger/store.js";
 
 const tool = { sessionID: "sess-1", agent: "team-leader" } as never;
 
-function runtimeFor(root: string, strictEvidence = true, answers: unknown[] = [{ type: "predicate", name: "is_safe", probability: 0.95 }]): AgentTeamRuntime {
+function runtimeFor(root: string, answers: unknown[] = [{ type: "predicate", name: "is_safe", probability: 0.95 }]): AgentTeamRuntime {
   const ctx = {
     app: { version: "2.2.0" },
     location: { project: { canonical: root } },
@@ -36,7 +36,6 @@ function runtimeFor(root: string, strictEvidence = true, answers: unknown[] = [{
   } as never;
   return createRuntime(ctx, {
     profile: "public",
-    strictEvidence,
     projectState: ".agent-team",
     telemetry: false,
     autonomy: { mode: "yolo", askBefore: [] },
@@ -56,7 +55,7 @@ async function project(runtime: AgentTeamRuntime): Promise<string> {
       happyPath: ["one thin flow"],
       allowedScope: ["src"],
       acceptanceCriteria: ["criterion-one"],
-      validationSteps: ["npm test"],
+      validationSteps: [{ criterionId: "criterion-one", command: "npm test" }],
       rollback: "revert",
     },
     tool,
@@ -86,11 +85,11 @@ async function withIndependentReview(runtime: AgentTeamRuntime): Promise<number>
   return revisionOf(runtime);
 }
 
-async function fresh(strictEvidence = true): Promise<{ runtime: AgentTeamRuntime; root: string }> {
+async function fresh(): Promise<{ runtime: AgentTeamRuntime; root: string }> {
   const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-judgement-"));
   _resetHeldDecisionsForTests();
   _resetDecisionModelCatalogForTests();
-  return { runtime: runtimeFor(root, strictEvidence), root };
+  return { runtime: runtimeFor(root), root };
 }
 
 const question = { type: "predicate" as const, name: "is_safe", instructions: "Is this safe?" };
@@ -100,7 +99,7 @@ describe("a judgement evidence row", () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-judgement-"));
     _resetHeldDecisionsForTests();
     _resetDecisionModelCatalogForTests();
-    const runtime = runtimeFor(root, true, [
+    const runtime = runtimeFor(root, [
       { type: "choice", name: "pick", choice: "a", probabilities: [{ value: "a", probability: 0.95 }], confidence: 0.9 },
       { type: "score", name: "score", score: 4, probabilities: [{ value: 4, label: "high", probability: 0.95 }], confidence: 0.9 },
       { type: "error", name: "bad", reason: "no answer" },
@@ -155,7 +154,7 @@ describe("a judgement evidence row", () => {
   });
 
   it("satisfies no criterion even when the strict-evidence setting is off", async () => {
-    const { runtime } = await fresh(false);
+    const { runtime } = await fresh();
     await project(runtime);
     const decision = JSON.parse((await executeEvaluateDecision(runtime, { criterionId: "criterion-one", state: "a diff", questions: [question] }, tool)).content);
     await executeEvidence(

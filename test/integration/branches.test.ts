@@ -24,11 +24,10 @@ function runtimeFor(root: string, options: Record<string, unknown> = {}): AgentT
     { location: { project: { canonical: root } }, options: {}, app: { version: "2.2.0" }, session: { create: async () => ({ id: "ses_child" }), prompt: async () => ({}) } } as never,
     {
       profile: "public",
-      strictEvidence: true,
       projectState: ".agent-team",
       telemetry: false,
       autonomy: { mode: "yolo", askBefore: [] },
-      orchestration: { maxParallelSpecialists: 6, allowedCheckPrefixes: [] },
+      orchestration: { maxParallelSpecialists: 6, allowedCheckPrefixes: [], archiveChildSessions: true },
       ...options,
     },
   );
@@ -160,7 +159,7 @@ describe("optional inputs and absent defaults", () => {
             happyPath: ["a"],
             allowedScope: ["src/**"],
             acceptanceCriteria: ["AC-1"],
-            validationSteps: ["npm test"],
+            validationSteps: [{ criterionId: "AC-1", command: "npm test" }],
             rollback: "revert",
           },
           leader,

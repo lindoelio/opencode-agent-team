@@ -5,7 +5,7 @@ import { sha256Hex } from "../util/hash.js";
 import { eventId } from "../util/ids.js";
 import { eventsPath, agentTeamDir, resolveInside, statePath, assertNoSymlinkEscape } from "../util/paths.js";
 import { AgentTeamEventSchema, AgentTeamProjectStateSchema, type AgentTeamEventV1, type AgentTeamProjectStateV2 } from "../domain/schemas.js";
-import { migrateUnknown } from "./migrations.js";
+import { CURRENT_SCHEMA_VERSION, migrateUnknown } from "./migrations.js";
 import { computeEventHash, GENESIS_HASH, verifyChain } from "./events.js";
 import { redactText, redactUnknown } from "./redaction.js";
 
@@ -42,6 +42,16 @@ export interface StoreContext {
   actor: string;
 }
 
+/**
+ * The one message every surface uses when the engagement does not exist yet.
+ *
+ * A refusal that names the next call is steering; one that only names the
+ * state is a dead end for a model that has no other way to learn the first
+ * move. Three copies of this sentence would drift, so there is one.
+ */
+export const STATE_NOT_INITIALIZED =
+  'agent-team state not initialized; call agent_team_state with action: "initialize" and the outcome first';
+
 function sessionHash(sessionId: string): string {
   return sha256Hex(sessionId).slice(0, 16);
 }
@@ -68,7 +78,9 @@ export async function readState(projectRoot: string): Promise<AgentTeamProjectSt
     throw err;
   }
   const parsed = JSON.parse(raw) as { schemaVersion?: number };
-  if (parsed?.schemaVersion === 1 || parsed?.schemaVersion === 2) return migrateStateFile(projectRoot, raw);
+  if (typeof parsed?.schemaVersion === "number" && parsed.schemaVersion !== CURRENT_SCHEMA_VERSION) {
+    return migrateStateFile(projectRoot, raw);
+  }
   return AgentTeamProjectStateSchema.parse(parsed);
 }
 
@@ -111,7 +123,7 @@ export async function appendEvent(
   return withLedgerLock(`agent-team:${root}`, async () => {
     await ensureLayout(root);
     const current = await readState(root);
-    if (!current) throw new Error("agent-team state not initialized; run agent_team_state initialize");
+    if (!current) throw new Error(STATE_NOT_INITIALIZED);
     const events = await readEvents(root);
     const chain = verifyChain(events);
     if (!chain.ok) throw new Error(`ledger chain broken at index ${chain.badIndex}; recover from backup`);
@@ -163,7 +175,7 @@ export async function initializeState(input: {
     const now = new Date().toISOString();
     const { engagementId } = await import("../util/ids.js");
     const state: AgentTeamProjectStateV2 = {
-      schemaVersion: 3,
+      schemaVersion: CURRENT_SCHEMA_VERSION,
       engagementClass: input.engagementClass ?? "change",
       ...(input.route ? { route: input.route } : {}),
       revision: 0,
@@ -180,6 +192,7 @@ export async function initializeState(input: {
       gates: [],
       evidence: [],
       approvals: [],
+      waivers: [],
       handoffs: [],
       nextAction: { description: "State the outcome to the leader", owner: "team-leader" },
     };

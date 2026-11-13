@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 /**
@@ -158,8 +159,38 @@ export function parseTrace(stdout: string): RunTrace {
   return trace;
 }
 
+/**
+ * An isolated XDG config home for a measured run.
+ *
+ * OpenCode also loads the plugins recorded in the *global* configuration. A
+ * globally installed copy of this plugin — possibly an older release — then
+ * registers the same tools next to the checkout under test, and the run
+ * measures a mixture of two versions: this is how a leader journey ended up
+ * with a `schemaVersion: 2` ledger and no wave ids. Credentials live under
+ * `XDG_DATA_HOME`, which stays untouched, so the isolation costs no login.
+ */
+export function isolatedConfigHome(): string {
+  const dir = path.join(os.tmpdir(), "agent-team-isolated-config");
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/**
+ * The environment a measured run gets.
+ *
+ * `PWD` is set because the CLI resolves the project from it, not from `cwd`.
+ * The isolated config home comes before the caller's overrides, so a test can
+ * still point a run at a specific configuration when it means to.
+ */
+export function runEnv(cwd: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return { ...process.env, XDG_CONFIG_HOME: isolatedConfigHome(), ...extra, PWD: cwd };
+}
+
 export async function runOpenCode(opts: RunOptions): Promise<OpenCodeRun> {
-  const args = ["run", "--agent", opts.agent, "--format", "json"];
+  // `--archived` keeps a measured run out of the person's thread list: the
+  // bench and the e2e suite are scripted work, not conversations. The plugin
+  // archives its own child sessions separately.
+  const args = ["run", "--agent", opts.agent, "--format", "json", "--archived"];
   if (opts.model) args.push("--model", opts.model);
   args.push(opts.prompt);
   // A case drives the whole operating loop — decisions, delegation, gates
@@ -172,7 +203,7 @@ export async function runOpenCode(opts: RunOptions): Promise<OpenCodeRun> {
     // - stdin must be closed, or it reads it and waits forever;
     // - the project is resolved from `PWD`, not from `cwd`, so a spawned
     //   process would otherwise resolve the agents of the caller's directory.
-    const env = { ...process.env, ...opts.env, PWD: opts.cwd };
+    const env = runEnv(opts.cwd, opts.env);
     // The run is its own process group: a specialist is a separate `opencode`
     // process, and a killed parent must never leave those children running.
     const child = spawn("opencode", args, { cwd: opts.cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
@@ -255,7 +286,7 @@ export async function materializeRoster(root: string): Promise<void> {
     pending: [],
     updateOnly: false,
     pluginPackage: "@lindoelio/opencode-agent-team",
-    pluginOptions: { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false },
+    pluginOptions: { profile: "public", projectState: ".agent-team", telemetry: false },
     includePluginOptions: true,
   });
 }

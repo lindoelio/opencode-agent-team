@@ -5,7 +5,6 @@ describe("options", () => {
   it("applies defaults", () => {
     const o = parseOptions({});
     expect(o.profile).toBe("public");
-    expect(o.strictEvidence).toBe(true);
     expect(o.projectState).toBe(".agent-team");
     expect(o.model).toBeUndefined();
     expect(o.telemetry).toBe(false);

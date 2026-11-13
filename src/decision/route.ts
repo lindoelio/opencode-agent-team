@@ -67,6 +67,12 @@ function s_class(value: "fix" | "change" | "decision" | undefined): "fix" | "cha
 async function writeRoute(runtime: AgentTeamRuntime, sessionID: string, route: Route): Promise<void> {
   const projectRoot = projectRootOf(runtime.ctx);
   const state = await readState(projectRoot).catch(() => null);
+  // An operator override is the leader's judgment over the router's. It is
+  // sticky within the engagement: without this guard, the next admitted
+  // prompt would re-route over it and silently undo the override.
+  if (state?.route?.overridden === true) {
+    return;
+  }
   if (!state) {
     pending.set(sessionID, route);
   }

@@ -185,6 +185,83 @@ the context hook. The projection is what the leader reads; the event log is what
 the system audits. A status question is answered from the projection and is
 instructed never to dump the raw event log.
 
+The projection is bounded on purpose: completed handoffs and decisions are
+capped with visible overflow counts, and the waiver list is rendered. A long
+engagement must not outgrow the context window of a small model — an unbounded
+projection degrades unevenly across models, which is exactly the variance this
+system exists to remove. The criteria lines and the gate read the same effective
+evidence set (see below), so the leader never sees a criterion as failed after a
+later observation proved it.
+
+### Prompt assembly has single sources
+
+The prompts a session receives are assembled from four places, and each has
+exactly one authoritative source:
+
+| Surface | Source | Injected |
+|---|---|---|
+| Agent identity and role prose | `assets/agents/**/*.md` (materialised by setup; user-editable) | As the agent file |
+| Role contract that survives a user edit | `ROLE_CONTRACTS` in `src/hooks/context.ts` | Every context event |
+| Constitution | `src/catalog/constitution.ts` | Every context event |
+| Skill map | `ROLE_SKILLS` in `src/catalog/skills.ts` | Every context event; drift-tested against the templates' `## Skills` block |
+
+The child prompt for a booked specialist is built in exactly one place
+(`childPrompt` in `src/orchestrator/launch.ts`). It carries the unit's
+`context`, the scope, the questions and required evidence, the canonical
+`SpecialistResult@1` shape, the read-only or helper boundary for the role, and
+the primary procedure of the skill the leader declared for that unit. A second
+renderer existed once and drifted; it was removed rather than kept in step.
+
+### Evidence is a time series
+
+`effectiveEvidence` in `src/domain/evidence.ts` is the only source the gate and
+the projection read. For each `(criterion, command)` pair it keeps the newest
+row, with one exception: an observed row outranks a later unobserved one, so a
+typed claim can never un-prove a check the plugin recorded. A fail therefore
+stops poisoning its criterion once a later observed pass of the same check
+exists. Rows without a command (typed submissions) are relaxed only by a
+recorded waiver — the single relaxation path in the gate algebra, visible in the
+gate result and in the projection.
+
+### Observation channels
+
+`execute.after` in `src/hooks/tool-audit.ts` turns a completed shell tool call
+into evidence: the command comes from the tool input, the exit code and output
+from the host's result, and `observeDeclaredCheck` matches it to the declared
+step. The `session.shell.ended` event is the fallback for a host that reports
+results that way. Neither channel trusts a claim: a result with no exit code is
+a failure, and a command that is not declared in the contract is ignored.
+
+### Route and review guards
+
+`launchWave` refuses a `change` wave without an explorer when the route does
+not name the file and the symptom, and refuses a reviewer whose `dependsOn`
+does not include a running or completed implementation. The recorded route
+override is the escape; the review gate still verifies scope coverage.
+
+### Calibrated decisions
+
+`src/decision/catalog.ts` asks the host for `types: ["decision"]` explicitly:
+the host's default model list is chat-only, so a decision model never appears
+otherwise, and newer host lines wrap the list in `{ data }` while older ones
+return the array. The prompt router reads the agent from the session record,
+because the prompt hook event carries no `agent` field — without that lookup
+the leader check is never true and routing silently does nothing. A judgement
+stays a record: it never satisfies a criterion and never supports a gate claim.
+
+### Session lineage
+
+`src/orchestrator/lineage.ts` keeps a per-process parent map. The host's
+`session.created` events feed it; when an event never arrives or does not carry
+the relation, the tool audit resolves the missing link from the host's own
+session record (`ctx.session.get`) once and caches both a positive answer and a
+definitive absence. A transient host failure is not cached, so a later call can
+still succeed. The tool audit walks the chain to find the handoff a helper agent
+descends from, and applies the same writable scope and shell allowlist the
+booked specialist received. Only a host that exposes no parent relation at all
+degrades to direct-session enforcement; nothing in the plugin pretends the
+lineage exists.
+
 ## The delivery loop
 
 The engagement moves through a fixed phase sequence. Forward steps are one phase
@@ -235,10 +312,11 @@ Three properties make the gates meaningful:
 - **CLAIM ≤ EVIDENCE.** A gate refuses a claim that is stronger than the evidence
   behind it. A delivery cannot claim production health on the strength of unit
   tests, however many criterion-linked rows it carries.
-- **A criterion needs proof.** A criterion is satisfied only by a `pass` row that
-  carries an artifact reference, a command or a digest. In `strictEvidence` mode a
-  `partial` row does not satisfy anything. A summary-only row never satisfies a
-  criterion in either mode.
+- **A criterion needs proof.** A criterion is satisfied only by an observed `pass`
+  row that carries an artifact reference, a command or a digest. A summary-only
+  row never satisfies a criterion. A criterion that is still failing is relaxed
+  only by a recorded waiver, which appears in the gate result's `waivers` list
+  and never in `satisfied`.
 - **Review must be independent.** `REVIEW` and `ACCEPT` require a completed
   `team-leader/reviewer` handoff whose scope overlaps the implementation's scope.
   "A reviewer handoff exists" is not enough — a reviewer pointed at nothing

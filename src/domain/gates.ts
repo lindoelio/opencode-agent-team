@@ -1,5 +1,5 @@
 import type { DecisionRef, EvidenceRef, GateRef, HandoffRef } from "./schemas.js";
-import { evidenceSatisfiesCriterion, type EvidenceKind } from "./evidence.js";
+import { effectiveEvidence, evidenceSatisfiesCriterion, type EvidenceKind } from "./evidence.js";
 import { scopeOverlaps } from "./scope.js";
 
 export interface GateResult {
@@ -18,13 +18,6 @@ export function evaluateAcceptGate(input: {
   waivers?: string[];
   blockedBy?: string[];
   /**
-   * When false (the default), a criterion is satisfied only by a `pass` row
-   * that carries proof. When true, a `partial` row that carries proof also
-   * satisfies it. A summary-only row never satisfies a criterion in either
-   * mode: the proof requirement is an integrity rule and does not relax.
-   */
-  acceptPartial?: boolean;
-  /**
    * The minimum evidence kind each criterion requires, keyed by criterion id.
    * Absence means any observed non-judgment kind may satisfy it.
    */
@@ -33,7 +26,6 @@ export function evaluateAcceptGate(input: {
   decisions?: DecisionRef[];
 }): GateResult {
   const waivers = input.waivers ?? [];
-  const acceptPartial = input.acceptPartial === true;
   const byCriterion = new Map<string, EvidenceRef[]>();
   for (const e of input.evidence) {
     const list = byCriterion.get(e.criterionId) ?? [];
@@ -45,7 +37,9 @@ export function evaluateAcceptGate(input: {
   const failed: string[] = [];
   for (const c of input.criteria) {
     if (waivers.includes(c)) continue;
-    const evs = byCriterion.get(c) ?? [];
+    // The effective set: the latest observation per (criterion, command), so
+    // a fixed check stops poisoning the criterion it later proves.
+    const evs = effectiveEvidence(byCriterion.get(c) ?? []);
     // A judgement is a record, not a proof: it neither satisfies nor fails a
     // criterion, so every branch below ignores it.
     if (evs.some((e) => e.kind !== "judgment" && e.status === "fail")) {
@@ -53,13 +47,12 @@ export function evaluateAcceptGate(input: {
       continue;
     }
     // pass requires verifiable artifact/command/digest, and a kind that meets
-    // the criterion's declared minimum.
+    // the criterion's declared minimum. A summary-only row never satisfies a
+    // criterion: the proof requirement is an integrity rule and does not relax.
     const required = input.criterionKinds?.[c];
     const passing = evs.filter((e) => {
       if (e.kind === "judgment") return false;
       if (e.status === "pass") return evidenceSatisfiesCriterion(e, required);
-      // Partial never satisfies, even when strictness is relaxed. Relaxing it
-      // would make "I ran part of the check" a pass without observation.
       return false;
     });
     if (passing.length > 0) satisfied.push(c);

@@ -103,8 +103,8 @@ are not.
 | `DISCOVERY` | Assumptions and decisions exist. |
 | `PLAN` | An active Delivery Contract is registered. |
 | `VERIFY` | An active delivery exists, and every acceptance criterion has a passing, criterion-linked evidence row that Agent Team observed and that carries proof. |
-| `REVIEW` | An independent reviewer handoff completed over the implementation's scope; no critical or high findings. |
-| `ACCEPT` | Same as `VERIFY`, plus no low-confidence assumption left open, plus traceable decisions, plus `CLAIM ≤ EVIDENCE`. |
+| `REVIEW` | An independent reviewer handoff completed over the implementation's scope; no critical or high findings. The reviewer's `allowedScope` must cover every implementation scope and every changed path. |
+| `ACCEPT` | Same as `VERIFY`, plus no low-confidence assumption left open, plus traceable decisions, plus `CLAIM ≤ EVIDENCE`. A `waive` recorded with `agent_team_state` is the only relaxation path: it never fabricates evidence and it stays visible in the gate result. |
 | `DELIVER` | A passing `ACCEPT`, no pending approval, and a delivery contract whose digest still matches. |
 
 A gate result is `PASS`, `FAIL` or `BLOCKED`. `BLOCKED` means *waiting*, not
@@ -278,7 +278,7 @@ enums.
 
 | Tool | Purpose |
 |---|---|
-| `agent_team_state` | Initialize, read, transition or register guardrails for the engagement. |
+| `agent_team_state` | Initialize, read, transition, register guardrails, waive a gate requirement, or override the route. A waiver is the only relaxation path and stays visible in the gate result. |
 | `agent_team_record_assumption` | Record a material assumption with epistemic basis, confidence and impact. |
 | `agent_team_record_decision` | Record a Decision Record with options, trade-offs, reversibility and authority. |
 | `agent_team_submit_evidence` | Submit criterion-linked evidence. A `pass` requires an artifact reference, a command or a digest. |
@@ -286,7 +286,7 @@ enums.
 | `agent_team_request_approval` | Open or resolve a scoped, expiring approval. Only needed when a guardrail fires. |
 | `agent_team_handoff` | Launch a wave: one child session per unit, bound to the leader, the role, and the allowed scope. A prompt packet is not a handoff. |
 | `agent_team_report` | The specialist exit. Only the launched session may call it; the plugin records the result. |
-| `agent_team_define_delivery` | Register the active Delivery Contract. Exactly one delivery is active at a time. |
+| `agent_team_define_delivery` | Register the active Delivery Contract. Each validation step is bound to the criterion it proves; exactly one delivery is active at a time. |
 | `agent_team_evaluate_decision` | Ask a decision model typed questions about a piece of evidence and get a calibrated verdict. |
 
 **The leader owns the ledger.** Only `team-leader` writes assumptions,
@@ -297,13 +297,41 @@ the revision contention parallel specialists would otherwise create.
 
 **Writes are checked against the handoff's scope.** A write outside
 `allowedScope`, or inside `prohibitedScope`, is refused by the tool-audit hook
-rather than silently accepted.
+rather than silently accepted — including a write made by a built-in helper
+agent a specialist launches. The helper's session lineage leads back to the
+handoff, and the same boundary and shell allowlist apply.
+
+**Evidence is a time series, not a verdict.** A failed run of a declared check
+is superseded by a later observed pass of the same check, so a delivery that
+was fixed can recover. A typed claim never supersedes an observed row; only a
+recorded waiver relaxes a criterion that is still failing.
+
+**Observation has two channels.** A host that exposes a shell surface is asked
+to run a declared check itself; a host that does not still reports the result of
+the check a specialist runs, through the tool hook — the command, the exit code
+and the output come from the host, never from the model. A delivery can be
+verified on a host with no shell surface.
+
+**The route and the reviewer are enforced.** A `change` whose route does not
+name the file and the symptom refuses a wave without an explorer; a recorded
+route override is the escape. A reviewer must declare the implementation it
+reviews in `dependsOn`, and the review gate still refuses a review whose scope
+does not cover the changed paths.
 
 **The parallel budget is enforced by the tool.** Every delegated specialist is
 a separate process with a real memory cost, so
 `orchestration.maxParallelSpecialists` (default `6`) bounds how many may run at
 once. It bounds concurrency, not the size of a delivery: independent work still
 runs in parallel, in bounded waves.
+
+**Child sessions do not pollute the thread list.** A specialist session is
+archived when it settles — when its report lands, or when the booking fails
+(`orchestration.archiveChildSessions`, default `true`). While it runs, the
+session list shows the work; when it is done, the list keeps only the
+conversation the person started. The ledger keeps the session id and the
+report, so an archived session is still auditable. Archiving is verified
+against the host's own record: a host that ignores `archived` is reported as
+failed instead of assumed to have worked.
 
 ## The ledger
 
@@ -371,7 +399,7 @@ prompt-injection obedience and specialist-created `team-leader/*` trees are
 | `autonomy.askBefore: ["deploy production"]` | Matching actions require explicit authorization. Plain text or regex, matched case-insensitively against `"<action> <resources>"`. |
 | `autonomy.mode: "guarded"` | Legacy opt-in: ask before external, destructive and outside-delivery actions. |
 | `orchestration.maxParallelSpecialists` *(default `6`)* | How many specialists may run at the same time. |
-| `strictEvidence` *(default `true`)* | When `true`, only a `pass` evidence row carrying proof satisfies a criterion. When `false`, a `partial` row carrying proof also does. A summary-only row never satisfies a criterion in either mode. |
+| `orchestration.archiveChildSessions` *(default `true`)* | Archive each specialist session when it settles (report or failure), keeping it out of the thread list. The ledger keeps the session id and the report. |
 
 `DENY` is final, and it cannot be weakened by a hook, a guardrail edit, an
 option change or a model instruction. The authority matrix also **fails
@@ -433,7 +461,6 @@ Options live under the plugin's `plugins` entry in `opencode.jsonc`:
     {
       "package": "@lindoelio/opencode-agent-team",
       "options": {
-        "strictEvidence": true,
         "orchestration": { "maxParallelSpecialists": 6 },
         "autonomy": {
           "mode": "yolo",
@@ -448,12 +475,12 @@ Options live under the plugin's `plugins` entry in `opencode.jsonc`:
 | Option | Type | Default | Meaning |
 |---|---|---|---|
 | `profile` | `"public" \| "private"` | `"public"` | Accepted for forward compatibility. It has no runtime effect today. |
-| `strictEvidence` | `boolean` | `true` | Whether a `partial` evidence row carrying proof may satisfy a criterion. |
 | `projectState` | `string` | `".agent-team"` | Directory the ledger is written to. |
 | `telemetry` | `boolean` | `false` | Cannot be enabled — the plugin throws if you set it to `true`. |
 | `autonomy.mode` | `"yolo" \| "guarded"` | `"yolo"` | The autonomy baseline. |
 | `autonomy.askBefore` | `string[]` | `[]` | Guardrails. Plain text or regex. |
 | `orchestration.maxParallelSpecialists` | `1…32` | `6` | Concurrent specialists. |
+| `orchestration.archiveChildSessions` | `boolean` | `true` | Archive each specialist session when it settles, keeping it out of the thread list. |
 | `model.providerID` | `string` | — | Pin every Agent Team agent to one provider. |
 | `model.modelID` | `string` | — | Pin every Agent Team agent to one model. |
 | `model.reasoningEffort` | `string` | — | Reasoning effort for every agent. |
@@ -529,10 +556,10 @@ Stated plainly, because a README that lists only strengths is not useful.
 |---|---|
 | Tool inputs are closed and their enums are canonical | A test asserts closure for all 10 tools and pins the declared enums — role, gate, evidence kind, work status — to the canonical domain enums |
 | The authority matrix | Unit tests over every rule, including that a rule which throws fails closed to `DENY` |
-| The gate algebra | Unit tests over pass/fail/partial/skipped/waived/blocked, the observed-evidence rule, the criterion-kind minimum and decision traceability |
+| The gate algebra | Unit tests over pass/fail/partial/skipped/waived/blocked, the observed-evidence rule, the supersede rule, the criterion-kind minimum and decision traceability |
 | The ledger | Real filesystems: hash chain, tamper detection, atomic writes, redaction, the lock timeout, concurrent appends |
 | Path containment | Real symlink and traversal tests |
-| Handoff scope enforcement | A tool call is refused when it leaves the handoff's scope |
+| Handoff scope enforcement | A tool call is refused when it leaves the handoff's scope — directly or through a built-in helper agent descended from the session |
 | The host compatibility matrix | `npm run compat:check` and a CI build and test the plugin against `@opencode/plugin` 2.2.0 |
 | The bench case definitions | Dry mode validates every case and fails on an unknown invariant name |
 | The published JSON Schemas | A test regenerates them from the Zod source and fails on drift |
@@ -585,10 +612,32 @@ npm run test:e2e      # real-model journeys against the opencode CLI (AGENT_TEAM
 npm run bench:model   # AgentTeamBench scored on real runs (AGENT_TEAM_BENCH=1)
 ```
 
+`AGENT_TEAM_E2E_TIMEOUT_MS` raises the harness timeout for a long e2e run; it is
+a harness limit, not a plugin one — Agent Team imposes no work-time limit on a
+specialist. `AGENT_TEAM_E2E_DECISION_MODEL` selects the decision model the
+decision e2e pins (default `opencode/jev-1.13-free`); set it to
+`opencode/jev-1.13` once the host exposes the paid model.
+
 `npm run bench` without a model **validates every case definition** and reports
 `not-evaluated` — it never scores a case 0 for the absence of a model. An
 unknown invariant name or an incoherent case fails the run, so a typo cannot
 pass CI unnoticed.
+
+When a host's plugin runtime ignores `session.update({ archived: true })`, a
+settled child session stays in the thread list; the ledger event records
+`archive: "failed"` and the reason. `npm run sessions:archive` lists those
+sessions and `npm run sessions:archive -- --apply` archives them through the
+host's HTTP API. It only touches sessions the plugin booked
+(`metadata.agentTeamParent`), never the leader's own conversation.
+
+```bash
+AGENT_TEAM_BENCH_MODELS="provider/a,provider/b" npm run bench:model
+```
+
+The model matrix runs the same cases across every model and reports the
+per-case spread and its mean as the consistency number. A single-model mean
+cannot say whether the method travels between models; the matrix is the
+instrument that can.
 
 Full guidance lives in one place each: [CONTRIBUTING.md](CONTRIBUTING.md) for
 the workflow, [STYLEGUIDE.md](STYLEGUIDE.md) for code style,

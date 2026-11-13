@@ -45,7 +45,7 @@ function freshCap(): Captured {
   return { sessionHooks: {}, permissionHooks: [], toolHooks: {}, storageData: new Map() };
 }
 
-const OPTS = { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false } as never;
+const OPTS = { profile: "public", projectState: ".agent-team", telemetry: false } as never;
 
 describe("hooks", () => {
   it("context hook injects constitution + projection + role contract, strips explorer tools", async () => {
@@ -99,7 +99,7 @@ describe("hooks", () => {
   it("context hook applies user-configured model options only", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-hook-"));
     const cap = freshCap();
-    const configured = createRuntime(mockHookCtx(root, cap), { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false, model: { providerID: "opencode", modelID: "muse-spark-1.3", reasoningEffort: "high", roleReasoningEffort: { "team-leader/explorer": "low" }, maxTokens: 4096 } } as never);
+    const configured = createRuntime(mockHookCtx(root, cap), { profile: "public", projectState: ".agent-team", telemetry: false, model: { providerID: "opencode", modelID: "muse-spark-1.3", reasoningEffort: "high", roleReasoningEffort: { "team-leader/explorer": "low" }, maxTokens: 4096 } } as never);
     const reg = await registerContextHook(configured);
     const cbs = cap.sessionHooks["context"]!;
     const primary = { agent: "team-leader", system: [] as unknown[], options: {} as Record<string, unknown>, tools: {} } as never;
@@ -182,6 +182,58 @@ describe("hooks", () => {
     expect(isValidationSafe("npm test -- run")).toBe(true);
     expect(isValidationSafe("git push origin main")).toBe(false);
     expect(isValidationSafe("rm -rf /")).toBe(false);
+  });
+  it("routes a leader prompt whose event carries no agent, using the session record", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-hook-"));
+    await initializeState({ projectRoot: root, sessionId: "sess-route", actor: "team-leader", outcome: "O" });
+    const cap = freshCap();
+    const runtime = createRuntime(
+      {
+        app: { version: "2.2.0" },
+        location: { project: { canonical: root } },
+        session: {
+          hook: async (name: string, cb: (e: never) => unknown) => {
+            (cap.sessionHooks[name] ??= []).push(cb);
+            return { dispose: async () => {} };
+          },
+          synthetic: async () => {},
+          prompt: async () => {},
+          get: async () => ({ data: { agent: "team-leader" } }),
+        },
+        model: {
+          list: async () => [
+            { id: "jev-1.13-free", modelID: "jev-1.13-free", providerID: "opencode", name: "Jev 1.13 Free", type: "decision", enabled: true, status: "active", cost: [{ input: 0, output: 0 }], limit: { context: 64000 } },
+          ],
+        },
+        experimental: {
+          generate: {
+            decisions: async () => ({
+              answers: [
+                { type: "choice", name: "engagement_class", choice: "fix", probabilities: [{ value: "fix", probability: 0.95 }], confidence: 0.9 },
+                { type: "predicate", name: "names_file_and_symptom", probability: 0.9 },
+                { type: "predicate", name: "risk_signal", probability: 0.05 },
+              ],
+              tokens: { input: 10, output: 0 },
+            }),
+          },
+        },
+      } as never,
+      { profile: "public", projectState: ".agent-team", telemetry: false } as never,
+    );
+    const { _resetRouteCacheForTests } = await import("../../src/decision/route.js");
+    const { _resetDecisionModelCatalogForTests } = await import("../../src/decision/catalog.js");
+    _resetRouteCacheForTests();
+    _resetDecisionModelCatalogForTests();
+    const reg = await registerPromptHook(runtime);
+    // No `agent` on the event: the hook must read it from the session record.
+    await cap.sessionHooks["prompt"]![0]!({ sessionID: "sess-route", prompt: { text: "fix the crash when the board has no title" }, metadata: {} } as never);
+    const { readState } = await import("../../src/ledger/store.js");
+    const state = await readState(root);
+    expect(state?.route?.engagementClass).toBe("fix");
+    expect(state?.route?.model).toContain("jev");
+    await reg.dispose();
+    _resetRouteCacheForTests();
+    _resetDecisionModelCatalogForTests();
   });
   it("retry hook only retries transient failures", async () => {
     const cap = freshCap();

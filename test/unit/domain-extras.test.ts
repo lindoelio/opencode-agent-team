@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { kindMeets, evidenceSatisfiesCriterion } from "../../src/domain/evidence.js";
-import { buildPacket, renderPacketPrompt, validateResult } from "../../src/domain/handoff.js";
+import { REPORT_SHAPE_LINE, handoffsRunInParallel, validateResult } from "../../src/domain/handoff.js";
 import { gateRecordFor, decisionsTraceable } from "../../src/domain/gates.js";
 import { statusForPhase, validatePhaseTransition } from "../../src/domain/state-machine.js";
 import { needsMigration, migrateUnknown, CURRENT_SCHEMA_VERSION, migrateV1toV2 } from "../../src/ledger/migrations.js";
@@ -10,7 +10,7 @@ import type { AgentTeamProjectStateV2 } from "../../src/domain/schemas.js";
 
 function baseState(): AgentTeamProjectStateV2 {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     engagementClass: "change",
     revision: 3,
     project: { id: "PRJ-X", canonicalDirectoryHash: "h" },
@@ -26,6 +26,7 @@ function baseState(): AgentTeamProjectStateV2 {
     gates: [{ gate: "VERIFY", result: "FAIL", claim: "c", satisfied: [], missing: ["AC-1"], failed: [], waivers: [], nextAction: "n", evaluatedAt: "t" }],
     evidence: [],
     approvals: [{ id: "APR-0001", category: "release", requestedAction: "publish", resources: ["npm"], reason: "r", risks: [], status: "pending", createdAt: "t" }],
+    waivers: [],
     handoffs: [],
     nextAction: { description: "Verify the delivery", owner: "team-leader/reviewer" },
   };
@@ -40,15 +41,20 @@ describe("domain extras", () => {
     expect(evidenceSatisfiesCriterion({ id: "E", criterionId: "AC-1", kind: "test", status: "pass", summary: "s", observedAt: "t", limitations: [] })).toBe(false);
     expect(evidenceSatisfiesCriterion({ id: "E", criterionId: "AC-1", kind: "test", status: "skipped", summary: "s", command: "npm test", observedAt: "t", limitations: [] })).toBe(false);
   });
-  it("builds and renders handoff packets, validates results", () => {
-    const p = buildPacket({ id: "HND-0001", role: "explorer", objective: "map it", context: ["c"], allowedScope: ["src/**"], prohibitedScope: [".env"], questions: ["q?"], requiredEvidence: ["tree"], stopCondition: "done" });
-    expect(p.output_schema).toBe("SpecialistResult@1");
-    const text = renderPacketPrompt(p);
-    expect(text).toContain("HND-0001");
-    expect(text).toContain("never create team-leader/* agents");
+  it("publishes one canonical report shape and validates results", () => {
+    expect(REPORT_SHAPE_LINE).toContain("recommended_next_action");
+    expect(REPORT_SHAPE_LINE).toContain("critical|high|medium|low|note");
     expect(() => validateResult({ status: "PASS", summary: "", findings: [], risks: [], unknowns: [], recommended_next_action: "x" })).toThrow();
     expect(() => validateResult({ status: "PASS", summary: "s", findings: [], risks: [], unknowns: [], recommended_next_action: "" })).toThrow();
     validateResult({ status: "ADVISORY", summary: "s", findings: [], risks: [], unknowns: [], recommended_next_action: "x" });
+  });
+  it("reads parallelism from the wave a booking belongs to", () => {
+    expect(handoffsRunInParallel([{ wave: "WV-001" }, { wave: "WV-001" }])).toBe(true);
+    expect(handoffsRunInParallel([{ wave: "WV-001" }, { wave: "WV-002" }])).toBe(false);
+    expect(handoffsRunInParallel([{ wave: "WV-001" }])).toBe(false);
+    // A handoff booked before waves existed carries no id and proves nothing.
+    expect(handoffsRunInParallel([{}, {}])).toBe(false);
+    expect(handoffsRunInParallel([])).toBe(false);
   });
   it("records gates and checks decision traceability", () => {
     const rec = gateRecordFor("ACCEPT", "done", { result: "PASS", satisfied: ["AC-1"], missing: [], failed: [], waivers: [], nextAction: "go" });
@@ -68,11 +74,12 @@ describe("domain extras", () => {
     validatePhaseTransition("VERIFY", "VERIFY");
   });
   it("handles migrations", () => {
-    expect(CURRENT_SCHEMA_VERSION).toBe(3);
-    expect(needsMigration(3)).toBe(false);
+    expect(CURRENT_SCHEMA_VERSION).toBe(4);
+    expect(needsMigration(4)).toBe(false);
+    expect(needsMigration(3)).toBe(true);
     expect(needsMigration(2)).toBe(true);
     expect(needsMigration(1)).toBe(true);
-    expect(migrateUnknown({ schemaVersion: 3 })).toEqual({ schemaVersion: 3 });
+    expect(migrateUnknown(baseState())).toEqual(baseState());
     expect(() => migrateUnknown({ schemaVersion: 9 })).toThrow();
     expect(() => migrateUnknown(null)).toThrow();
   });
@@ -137,7 +144,7 @@ describe("domain extras", () => {
     state.activeDelivery = {
       id: "DEL-001", title: "t", userOutcome: "u", entryState: "e", happyPath: ["h"],
       inScope: [], outOfScope: [], allowedScope: ["src/**"], prohibitedScope: [],
-      acceptanceCriteria: ["AC-1", "AC-2"], validationSteps: ["npm test"], proof: [],
+      acceptanceCriteria: ["AC-1", "AC-2"], validationSteps: [{ criterionId: "AC-1", command: "npm test" }], proof: [],
       risks: [], rollback: "revert", owner: "team-leader", status: "IN_PROGRESS",
     };
     state.evidence = [

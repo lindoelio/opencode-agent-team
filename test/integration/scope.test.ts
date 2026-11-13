@@ -11,7 +11,7 @@ import { executeGate } from "../../src/tools/gate.js";
 import { pathAllowed, pathInScope, pathProhibited, scopeOverlaps } from "../../src/domain/scope.js";
 import { independentReviewCheck } from "../../src/domain/gates.js";
 
-const OPTS = { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false } as never;
+const OPTS = { profile: "public", projectState: ".agent-team", telemetry: false } as never;
 const leader = { sessionID: "sess-1", agent: "team-leader" } as never;
 
 describe("scope matching", () => {

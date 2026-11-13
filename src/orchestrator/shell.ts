@@ -34,6 +34,51 @@ export function recordShellEnded(sessionID: string, data: unknown): void {
   waiters.delete(sessionID);
 }
 
+export interface ShellEndedFacts {
+  sessionID: string;
+  command: string;
+  exitCode: number;
+  output: string;
+  cwd?: string;
+}
+
+/**
+ * Reads the host's `session.shell.ended` event.
+ *
+ * This is the observation path that does not need a host shell *surface*: the
+ * specialist runs the declared check with its own shell tool — which the tool
+ * audit already limits to the allowlist — and the host reports the command,
+ * the exit code and the output. The model never supplies the exit code, so a
+ * recorded pass is still an observation rather than a claim.
+ */
+export function parseShellEnded(event: unknown): ShellEndedFacts | undefined {
+  const e = event as {
+    type?: string;
+    data?: { shell?: Record<string, unknown>; output?: Record<string, unknown>; sessionID?: string };
+    sessionID?: string;
+    properties?: { sessionID?: string };
+  };
+  if (e?.type !== "session.shell.ended") return undefined;
+  const data = e.data ?? {};
+  const shell = (data.shell ?? {}) as Record<string, unknown>;
+  const output = (data.output ?? {}) as Record<string, unknown>;
+  const sessionID = String(data.sessionID ?? e.sessionID ?? e.properties?.sessionID ?? "");
+  const command = String(shell["command"] ?? "");
+  if (!sessionID || !command) return undefined;
+  const exit = shell["exit"];
+  const status = String(shell["status"] ?? "");
+  // A host that reports no exit code still reports how the shell ended: only
+  // a clean exit is a success, and a timeout or a kill is a failure.
+  const exitCode = typeof exit === "number" && Number.isFinite(exit) ? exit : status === "exited" ? 0 : 1;
+  return {
+    sessionID,
+    command,
+    exitCode,
+    output: String(output["output"] ?? ""),
+    ...(typeof shell["cwd"] === "string" ? { cwd: shell["cwd"] } : {}),
+  };
+}
+
 function waitFor(sessionID: string, timeoutMs: number): Promise<ShellOutcome> {
   const existing = results.get(sessionID);
   if (existing) {

@@ -67,6 +67,32 @@ describe("decision model discovery", () => {
   it("returns nothing when the host exposes no decision model", async () => {
     expect(await discoverDecisionModels(ctxWith([hostModel({ type: "chat" })]))).toEqual([]);
   });
+
+  it("asks the host for decision models explicitly, because the default is chat", async () => {
+    let seen: unknown;
+    const ctx = {
+      model: {
+        list: async (input: unknown) => {
+          seen = input;
+          return [hostModel({ id: "jev-1.13-free", modelID: "jev-1.13-free", name: "Jev 1.13 Free" })];
+        },
+      },
+    } as unknown as AgentTeamContext;
+    const models = await discoverDecisionModels(ctx);
+    expect(models.map((m) => m.id)).toEqual(["jev-1.13-free"]);
+    expect(seen).toEqual({ types: ["decision"] });
+  });
+
+  it("accepts the host's wrapped list shape and rejects one with no list", async () => {
+    const wrapped = {
+      model: { list: async () => ({ location: {}, data: [hostModel({ id: "jev", modelID: "jev" })] }) },
+    } as unknown as AgentTeamContext;
+    expect((await discoverDecisionModels(wrapped)).map((m) => m.id)).toEqual(["jev"]);
+    const empty = {
+      model: { list: async () => ({ location: {} }) },
+    } as unknown as AgentTeamContext;
+    expect(await discoverDecisionModels(empty)).toEqual([]);
+  });
 });
 
 describe("decision model selection", () => {

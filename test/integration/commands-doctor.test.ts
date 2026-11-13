@@ -11,7 +11,7 @@ import { SKILL_IDS } from "../../src/catalog/skills.js";
 import { initializeState } from "../../src/ledger/store.js";
 import plugin from "../../src/index.js";
 
-const OPTS = { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false } as never;
+const OPTS = { profile: "public", projectState: ".agent-team", telemetry: false } as never;
 
 function baseCtx(root: string, overrides: Record<string, unknown> = {}): never {
   return {
@@ -90,7 +90,7 @@ describe("doctor", () => {
     expect(report.checks.find((c) => c.name === "Model catalog")?.status).toBe("PASS");
     expect(report.checks.find((c) => c.name === "Reasoning effort")?.status).toBe("PASS");
     expect(report.checks.find((c) => c.name === "Reasoning effort")?.detail).toContain("harness default");
-    const configured = createRuntime(baseCtx(root), { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false, model: { reasoningEffort: "ultra" } } as never);
+    const configured = createRuntime(baseCtx(root), { profile: "public", projectState: ".agent-team", telemetry: false, model: { reasoningEffort: "ultra" } } as never);
     const r2 = await runDoctor(configured);
     expect(r2.checks.find((c) => c.name === "Reasoning effort")?.status).toBe("FAIL");
     expect(r2.checks.find((c) => c.name === "Reasoning effort")?.detail).toContain("ultra");
@@ -224,7 +224,6 @@ describe("command handlers", () => {
     // a session that configures the plugin differently from the defaults
     const { defs } = await captureCommands(root, undefined, {
       profile: "private",
-      strictEvidence: false,
       projectState: ".my-state",
       telemetry: false,
     } as never);
@@ -233,11 +232,11 @@ describe("command handlers", () => {
       await setup.execute({ sessionID: "s", prompt: { text: '/agent-team/setup --apply --scope global --set-default --leader-title "Meu Time"' }, delivery: "steer" } as never);
       const configDir = path.join(process.env["XDG_CONFIG_HOME"] ?? "", "opencode");
       return JSON.parse(await fs.promises.readFile(path.join(configDir, "opencode.json"), "utf8")) as {
-        plugins: Array<{ package: string; options: { profile: string; strictEvidence: boolean; projectState: string } }>;
+        plugins: Array<{ package: string; options: { profile: string; projectState: string; telemetry: boolean } }>;
       };
     });
     expect(config.plugins[0]!.options.profile).toBe("public");
-    expect(config.plugins[0]!.options.strictEvidence).toBe(true);
+    expect(config.plugins[0]!.options.telemetry).toBe(false);
     expect(config.plugins[0]!.options.projectState).toBe(".agent-team");
   });
 
@@ -245,17 +244,16 @@ describe("command handlers", () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-team-cmd-"));
     const { defs } = await captureCommands(root, undefined, {
       profile: "private",
-      strictEvidence: false,
       projectState: ".my-state",
       telemetry: false,
     } as never);
     const setup = defs.find((d) => d.name === "agent-team/setup")!;
     await withConfigHome(() => setup.execute({ sessionID: "s", prompt: { text: "/agent-team/setup --apply --scope project" }, delivery: "steer" } as never));
     const config = JSON.parse(await fs.promises.readFile(path.join(root, "opencode.jsonc"), "utf8")) as {
-      plugins: Array<{ options: { profile: string; strictEvidence: boolean; projectState: string } }>;
+      plugins: Array<{ options: { profile: string; projectState: string; telemetry: boolean } }>;
     };
     expect(config.plugins[0]!.options.profile).toBe("private");
-    expect(config.plugins[0]!.options.strictEvidence).toBe(false);
+    expect(config.plugins[0]!.options.telemetry).toBe(false);
     expect(config.plugins[0]!.options.projectState).toBe(".my-state");
   });
 

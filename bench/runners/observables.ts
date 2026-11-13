@@ -1,4 +1,5 @@
 import type { RunTrace } from "./opencode.js";
+import { handoffsRunInParallel } from "../../src/domain/handoff.js";
 
 /**
  * What a bench case observes after a real run: the ledger, the files the run
@@ -31,7 +32,7 @@ interface LedgerShape {
   activeDelivery?: {
     happyPath?: string[];
     allowedScope?: string[];
-    validationSteps?: string[];
+    validationSteps?: Array<{ criterionId: string; command: string }>;
     rollback?: string;
     acceptanceCriteria?: string[];
     id?: string;
@@ -47,7 +48,7 @@ interface LedgerShape {
     judgment?: { decisionId?: string; verdict?: string; verified?: boolean; criterion?: string; model?: string; thresholds?: { probability?: number; confidence?: number } };
   }>;
   gates?: Array<{ gate?: string; result?: string }>;
-  handoffs?: Array<{ role?: string; status?: string; skills?: string[]; dependsOn?: string[]; allowedScope?: string[]; result?: { findings?: Array<{ severity?: string }>; risks?: string[] } }>;
+  handoffs?: Array<{ role?: string; status?: string; skills?: string[]; dependsOn?: string[]; allowedScope?: string[]; wave?: string; result?: { findings?: Array<{ severity?: string }>; risks?: string[] } }>;
   approvals?: Array<{ status?: string }>;
 }
 
@@ -147,10 +148,14 @@ export const INVARIANT_CHECKERS: Record<string, (obs: BenchObservation) => boole
     return criteria.every((c) => evidence.some((e) => e.criterionId === c && e.kind !== "judgment" && e.status === "pass" && hasProof(e)));
   },
   accept_gate_passed: (obs) => (ledgerOf(obs).gates ?? []).some((g) => g.gate === "ACCEPT" && g.result === "PASS"),
-  delegates_to_specialists: (obs) => obs.trace.subagents.length > 0,
-  skills_loaded_before_acting: (obs) => obs.trace.skillsLoaded.length > 0,
+  delegates_to_specialists: (obs) =>
+    // The wave API books specialists without going through the host's
+    // subagent tool, so the ledger is the primary evidence and the trace is
+    // the fallback for a run that delegated the built-in way.
+    (ledgerOf(obs).handoffs ?? []).length > 0 || obs.trace.subagents.length > 0,
   handoff_assigns_skills: (obs) => (ledgerOf(obs).handoffs ?? []).some((h) => (h.skills ?? []).length > 0),
-  independent_units_run_in_parallel: (obs) => observedParallelism(obs.trace),
+  independent_units_run_in_parallel: (obs) =>
+    handoffsRunInParallel(ledgerOf(obs).handoffs ?? []) || observedParallelism(obs.trace),
   /**
    * A calibrated decision reached the ledger.
    *

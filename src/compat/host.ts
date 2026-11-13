@@ -103,6 +103,18 @@ export interface SessionLauncher {
   prompt(input: unknown): Promise<unknown>;
   switchAgent?(input: unknown): Promise<unknown>;
   wait?(input: unknown): Promise<unknown>;
+  /**
+   * Hides a child session from the session list.
+   *
+   * The host stores an archive timestamp and the client leaves archived
+   * sessions out of the thread list. The SDK typings on the oldest supported
+   * line do not declare `archived` on `session.update`, so the call goes
+   * through the host view and is best-effort: a host that does not accept it
+   * keeps its sessions visible and nothing else changes.
+   */
+  archive?(sessionID: string): Promise<unknown>;
+  /** Reads a session back, used to verify that the archive took effect. */
+  get?(sessionID: string): Promise<unknown>;
 }
 
 export interface SessionSurface {
@@ -117,6 +129,8 @@ export function resolveSessionLauncher(ctx: unknown): SessionSurface {
       prompt?: (input: unknown) => Promise<unknown>;
       switchAgent?: (input: unknown) => Promise<unknown>;
       wait?: (input: unknown) => Promise<unknown>;
+      get?: (input: unknown) => Promise<unknown>;
+      update?: (input: unknown) => Promise<unknown>;
     };
   };
   const create = surface.session?.create;
@@ -129,6 +143,10 @@ export function resolveSessionLauncher(ctx: unknown): SessionSurface {
       prompt: (input: unknown) => prompt(input),
       ...(typeof surface.session?.switchAgent === "function" ? { switchAgent: (input: unknown) => surface.session!.switchAgent!(input) } : {}),
       ...(typeof surface.session?.wait === "function" ? { wait: (input: unknown) => surface.session!.wait!(input) } : {}),
+      ...(typeof surface.session?.get === "function" ? { get: (sessionID: string) => surface.session!.get!({ sessionID }) } : {}),
+      ...(typeof surface.session?.update === "function"
+        ? { archive: (sessionID: string) => surface.session!.update!({ sessionID, archived: true }) }
+        : {}),
     },
   };
 }

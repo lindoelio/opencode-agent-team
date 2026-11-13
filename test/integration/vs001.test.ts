@@ -52,7 +52,7 @@ describe("VS-001 deterministic delivery loop", () => {
         entryState: "board without archive", happyPath: ["add task", "archive task", "filter active", "filter archived"],
         inScope: ["src/board.ts"], outOfScope: ["auth", "db", "deploy"], allowedScope: ["src/board.ts"],
         prohibitedScope: ["src/auth.ts"], acceptanceCriteria: ["AC-001", "AC-002"],
-        validationSteps: ["npm test"], proof: [{ kind: "functional", claim: "board flow test", ref: "board flow test" }],
+        validationSteps: [{ criterionId: "AC-001", command: "npm test" }], proof: [{ kind: "functional", claim: "board flow test", ref: "board flow test" }],
         risks: ["none"], rollback: "revert src/board.ts", owner: "team-leader", status: "IN_PROGRESS",
       },
       nextAction: { description: "Execute DEL-001", owner: "team-leader/coder" },

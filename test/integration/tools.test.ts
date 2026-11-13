@@ -18,7 +18,7 @@ import { recordObservedEvidence } from "../../src/orchestrator/observe.js";
 function runtimeFor(root: string): AgentTeamRuntime {
   return createRuntime(
     { location: { project: { canonical: root } }, options: {}, app: { version: "2.2.0" }, session: { create: async () => ({ id: "ses_child" }), prompt: async () => ({}) } } as never,
-    { profile: "public", strictEvidence: true, projectState: ".agent-team", telemetry: false, autonomy: { mode: "yolo", askBefore: [] }, orchestration: { maxParallelSpecialists: 6, allowedCheckPrefixes: [] } },
+    { profile: "public", projectState: ".agent-team", telemetry: false, autonomy: { mode: "yolo", askBefore: [] }, orchestration: { maxParallelSpecialists: 6, allowedCheckPrefixes: [], archiveChildSessions: true } },
   );
 }
 
@@ -135,7 +135,7 @@ describe("agent-team tools end to end", () => {
       activeDelivery: {
         id: "DEL-001", title: "t", userOutcome: "u", entryState: "e", happyPath: ["h"],
         inScope: [], outOfScope: [], allowedScope: ["src/a.ts"], prohibitedScope: [],
-        acceptanceCriteria: ["AC-1"], validationSteps: ["npm test"], proof: [],
+        acceptanceCriteria: ["AC-1"], validationSteps: [{ criterionId: "AC-1", command: "npm test" }], proof: [],
         risks: [], rollback: "revert", owner: "team-leader", status: "IN_PROGRESS",
       },
     }));
@@ -168,7 +168,7 @@ describe("agent-team tools end to end", () => {
       activeDelivery: {
         id: "DEL-001", title: "t", userOutcome: "u", entryState: "e", happyPath: ["h"],
         inScope: [], outOfScope: [], allowedScope: ["src/a.ts"], prohibitedScope: [],
-        acceptanceCriteria: ["AC-1"], validationSteps: ["npm test"], proof: [],
+        acceptanceCriteria: ["AC-1"], validationSteps: [{ criterionId: "AC-1", command: "npm test" }], proof: [],
         risks: [], rollback: "revert", owner: "team-leader", status: "IN_PROGRESS",
       },
     }));
@@ -215,7 +215,7 @@ describe("agent-team tools end to end", () => {
       activeDelivery: {
         id: "DEL-001", title: "t", userOutcome: "u", entryState: "e", happyPath: ["h"],
         inScope: [], outOfScope: [], allowedScope: ["src/a.ts"], prohibitedScope: [],
-        acceptanceCriteria: ["AC-1"], validationSteps: ["npm test"], proof: [],
+        acceptanceCriteria: ["AC-1"], validationSteps: [{ criterionId: "AC-1", command: "npm test" }], proof: [],
         risks: [], rollback: "revert", owner: "team-leader", status: "IN_PROGRESS",
       },
     }));
@@ -348,7 +348,7 @@ describe("agent-team tools end to end", () => {
       allowedScope: ["src/board.ts"],
       prohibitedScope: ["src/auth.ts"],
       acceptanceCriteria: ["AC-1", "AC-2"],
-      validationSteps: ["npm test"],
+      validationSteps: [{ criterionId: "AC-1", command: "npm test" }],
       proof: [{ kind: "functional", claim: "priority is stored", ref: "board flow test" }],
       risks: [],
       rollback: "revert src/board.ts",
